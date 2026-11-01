@@ -1,24 +1,16 @@
-// One-off safe public endpoint diagnostic for KBO postseason. No credentials.
-const host = "https://api-gw.sports.naver.com/schedule/games";
-const checks = [
-  ["broad1","2026-10-14","2026-10-31"],
-  ["broad2","2026-11-01","2026-11-20"],
-  ["onePO","2026-10-26","2026-10-26"],
-  ["oneToday","2026-11-01","2026-11-01"],
-  ["sevenDays","2026-10-26","2026-11-01"]
+// Public endpoint availability probe. No credentials or private URLs.
+const sources=[
+  ["tving","https://www.tving.com/sports/kbo"],
+  ["yagoonara","https://www.yagoonara.com/postseason/schedule"],
+  ["mykbo","https://mykbostats.com/"],
+  ["naver-daily","https://api-gw.sports.naver.com/schedule/games?upperCategoryId=kbaseball&fromDate=2026-11-01&toDate=2026-11-01"]
 ];
-for (const [label,from,to] of checks) {
- const url=host+"?"+new URLSearchParams({upperCategoryId:"kbaseball",fromDate:from,toDate:to});
- try {
-  const resp=await fetch(url,{headers:{"Accept":"application/json","User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(12000)});
-  const raw=await resp.text();
-  const parsed=JSON.parse(raw);
-  const games=parsed?.result?.games;
-  const cats=Object.entries((Array.isArray(games)?games:[]).reduce((acc,g)=>{const k=g.categoryId||"null";acc[k]=(acc[k]||0)+1;return acc;},{}));
-  console.log(JSON.stringify({label,status:resp.status,ok:parsed.success,rows:Array.isArray(games)?games.length:null,categories:cats,sample:(games||[]).slice(0,3).map(x=>({gameId:x.gameId,categoryId:x.categoryId,home:x.homeTeamName,away:x.awayTeamName,date:x.gameDateTime,status:x.statusCode})),reason:!games?raw.slice(0,140):null}));
- }catch(err){console.log(JSON.stringify({label,error:String(err).slice(0,240)}));}
-}
-try {
- const res=await fetch("https://matchday-pandascore-feed.kungsman3356.workers.dev/health",{signal:AbortSignal.timeout(8000)});
- console.log("deployed-health",res.status,(await res.text()).slice(0,300));
-}catch(e){console.log("deployed-health-error",String(e).slice(0,160));}
+await Promise.all(sources.map(async ([source,url])=>{
+  try {
+    const response=await fetch(url,{headers:{Accept:"text/html,application/json","User-Agent":"Mozilla/5.0 (compatible; MatchdayMonitor/1.0)"},signal:AbortSignal.timeout(7000)});
+    const body=await response.text();
+    console.log(JSON.stringify({source,status:response.status,length:body.length,contentType:response.headers.get("content-type"),hasSamsung:/삼성|Samsung/.test(body),hasPlayoff:/플레이오프|Playoff|postseason/.test(body),hasNov1:/11월 1일|11\.01|2026-11-01/.test(body),sample:body.slice(0,80)}));
+  }catch(e){console.log(JSON.stringify({source,error:String(e)}));}
+}));
+const health=await fetch("https://matchday-pandascore-feed.kungsman3356.workers.dev/health");
+console.log("deployed-health",health.status,(await health.text()).slice(0,200));
