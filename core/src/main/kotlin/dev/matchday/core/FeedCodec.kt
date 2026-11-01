@@ -21,7 +21,8 @@ object FeedCodec {
                 t.str("short"), t.str("mark", t.str("short")), t.str("logoUrl")) },
             games = rows("games").map { g -> Game(g.str("id"), g.str("competition"), g.str("season"),
                 g.str("dateTime"), g.str("home"), g.str("away"), g.str("status"), g.optInt("homeScore"),
-                g.optInt("awayScore"), g.str("stage"), g.str("venue"), g.str("seriesId")) },
+                g.optInt("awayScore"), g.str("stage"), g.str("venue"), g.str("seriesId"),
+                g.str("inning"), g.str("checkedAt")) },
             standings = rows("standings").map { s -> Standing(s.str("competition"), s.str("season"),
                 s.int("rank"), s.str("team"), s.int("played"), s.int("won"), s.int("lost"),
                 s.int("drawn"), s.int("forScore"), s.int("againstScore"), s.str("streak")) },
@@ -30,6 +31,63 @@ object FeedCodec {
                 b.int("leftWins"), b.int("rightWins"), b.str("status"), b.str("scheduled"),
                 b.int("bestOf", 5), b.str("nextId")) }
         ).validate()
+    }
+
+
+    /** Encode merged live data for cached playback and Wear Data Layer updates. */
+    fun encode(feed: SportsFeed): String {
+        fun team(t: Team) = mapOf(
+            "id" to t.id, "sport" to t.sport, "name" to t.name,
+            "short" to t.short, "mark" to t.mark, "logoUrl" to t.logoUrl)
+        fun game(g: Game) = mapOf(
+            "id" to g.id, "competition" to g.competition, "season" to g.season,
+            "dateTime" to g.dateTime, "home" to g.home, "away" to g.away,
+            "status" to g.status, "homeScore" to g.homeScore, "awayScore" to g.awayScore,
+            "stage" to g.stage, "venue" to g.venue, "seriesId" to g.seriesId,
+            "inning" to g.inning, "checkedAt" to g.checkedAt)
+        fun standing(v: Standing) = mapOf(
+            "competition" to v.competition, "season" to v.season,
+            "rank" to v.rank, "team" to v.team, "played" to v.played,
+            "won" to v.won, "lost" to v.lost, "drawn" to v.drawn,
+            "forScore" to v.forScore, "againstScore" to v.againstScore, "streak" to v.streak)
+        fun series(v: Series) = mapOf(
+            "id" to v.id, "competition" to v.competition, "stage" to v.stage,
+            "group" to v.group, "roundIndex" to v.roundIndex,
+            "left" to v.left, "right" to v.right,
+            "leftWins" to v.leftWins, "rightWins" to v.rightWins,
+            "status" to v.status, "scheduled" to v.scheduled,
+            "bestOf" to v.bestOf, "nextId" to v.nextId)
+        return writeJson(mapOf(
+            "schemaVersion" to 1, "updatedAt" to feed.updatedAt,
+            "isDemo" to feed.isDemo, "demoDay" to feed.demoDay,
+            "teams" to feed.teams.map(::team), "games" to feed.games.map(::game),
+            "standings" to feed.standings.map(::standing),
+            "series" to feed.series.map(::series)
+        ))
+    }
+
+    private fun writeJson(value: Any?): String = when (value) {
+        null -> "null"
+        is Boolean, is Number -> value.toString()
+        is String -> buildString {
+            append('"')
+            for (c in value) when (c) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                else -> if (c.code < 32) append("\\u%04x".format(c.code)) else append(c)
+            }
+            append('"')
+        }
+        is Iterable<*> -> value.joinToString(prefix = "[", postfix = "]") { writeJson(it) }
+        is Map<*, *> -> value.entries.joinToString(prefix = "{", postfix = "}") {
+            writeJson(it.key.toString()) + ":" + writeJson(it.value)
+        }
+        else -> error("지원되지 않는 JSON 값")
     }
 
     private fun Map<*, *>.str(key: String, fallback: String = ""): String = this[key] as? String ?: fallback
