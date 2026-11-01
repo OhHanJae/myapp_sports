@@ -14,6 +14,9 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.matchday.core.Game
 import dev.matchday.core.SportsFeed
+import dev.matchday.core.TileMatchChoice
+import dev.matchday.core.TileMatchKind
+import dev.matchday.core.selectTileMatch
 import java.time.LocalDate
 
 /** Two separately selectable tiles; both use the latest phone-synced offline cache. */
@@ -29,9 +32,7 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
         val today = feed.referenceDay()
         val daily = feed.games.filter { it.competition in comps && it.day() == today }
         val fav = if (sport == "KBO") "SAM" else "GEN"
-        val match = daily.firstOrNull { it.home == fav || it.away == fav }
-            ?: feed.games.filter { it.competition in comps && it.status == "UPCOMING" && it.day() >= today && (it.home == fav || it.away == fav) }
-                .minByOrNull { it.dateTime }
+        val match = feed.selectTileMatch(comps, fav, today)
         val root = tileLayout(feed, daily.size, match, today)
         val tile = TileBuilders.Tile.Builder()
             .setResourcesVersion(resourcesVersion)
@@ -56,9 +57,11 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
         return Futures.immediateFuture(resource.build())
     }
 
-    private fun tileLayout(feed: SportsFeed, todaysCount: Int, match: Game?, today: LocalDate): LayoutElementBuilders.LayoutElement {
+    private fun tileLayout(feed: SportsFeed, todaysCount: Int, choice: TileMatchChoice?, today: LocalDate): LayoutElementBuilders.LayoutElement {
         val accent = if (sport == "KBO") 0xFF428BFF.toInt() else 0xFF1DCE7A.toInt()
-        val title = if (sport == "KBO") "KBO · 오늘 ${todaysCount}경기" else "LoL · 오늘 ${todaysCount}경기"
+        val title = if (choice?.kind == TileMatchKind.NEXT_GAME) {
+            if (sport == "KBO") "KBO · 다음 경기" else "LoL · 다음 경기"
+        } else if (sport == "KBO") "KBO · 오늘 ${todaysCount}경기" else "LoL · 오늘 ${todaysCount}경기"
         val clickable = ModifiersBuilders.Clickable.Builder()
             .setId("open_matchday")
             .setOnClick(ActionBuilders.LaunchAction.Builder()
@@ -78,11 +81,12 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
             .addContent(text(title, 15f, 0xFFFFFFFF.toInt()))
             .addContent(spacer(13f))
 
-        if (match == null) {
-            column.addContent(text("등록된 응원팀 경기가 없습니다", 13f, 0xFFFFFFFF.toInt()))
+        if (choice == null) {
+            column.addContent(text("등록된 경기 일정이 없습니다", 13f, 0xFFFFFFFF.toInt()))
                 .addContent(spacer(8f))
                 .addContent(text("눌러서 전체 일정 보기", 11f, accent))
         } else {
+            val match = choice.game
             val home = feed.team(match.home)
             val away = feed.team(match.away)
             val score = match.scoreText()
@@ -96,7 +100,13 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
             item.addContent(text(score, 23f, 0xFFFFFFFF.toInt()))
             item.addContent(spacerWidth(7f))
             if (awayRes != 0) item.addContent(image(away.id))
-            column.addContent(item.build())
+            column.addContent(text(when (choice.kind) {
+                    TileMatchKind.FAVORITE_TODAY -> "응원팀 오늘 경기"
+                    TileMatchKind.OTHER_TODAY -> "오늘의 다른 경기"
+                    TileMatchKind.NEXT_GAME -> "가장 가까운 예정 경기"
+                }, 11f, accent))
+                .addContent(spacer(5f))
+                .addContent(item.build())
                 .addContent(spacer(5f))
                 .addContent(text("${home.short}  VS  ${away.short}", 13f, 0xFFFFFFFF.toInt()))
                 .addContent(spacer(6f))
