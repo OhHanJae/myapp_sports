@@ -91,7 +91,8 @@ test("full feed retains LoL international matches, standings, brackets and KBO",
   assert.ok(feed.games.some(x=>x.id.includes("20261026HTSS0")));
   assert.ok(feed.games.some(x=>x.home==="SAM"&&x.away==="KIA"&&x.dateTime.startsWith("2026-11-01")));
   assert.ok(feed.games.some(x=>x.home==="KT"&&x.away==="TBD"&&x.dateTime.startsWith("2026-11-03")));
-  assert.ok(feed.series.some(x=>x.competition==="KBO"));
+  assert.ok(feed.series.some(x=>x.competition==="KBO" && x.stage==="플레이오프"));
+  assert.ok(feed.series.some(x=>x.competition==="KBO" && x.stage==="한국시리즈"));
   assert.ok(feed.games.some(x=>x.competition==="WORLDS"));
   assert.ok(feed.games.some(x=>x.competition==="LCK"));
   assert.ok(feed.standings.some(x=>x.competition==="LCK"));
