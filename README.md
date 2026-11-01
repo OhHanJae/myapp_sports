@@ -23,6 +23,8 @@
 
 웹 배포/오류 대응 및 데이터 제공 범위: [docs/LIVE_API_SETUP.md](docs/LIVE_API_SETUP.md).
 
+> **실제 데이터 v2 업데이트:** 워치 타일은 응원팀 오늘 경기 → 다른 팀 오늘 경기 → 가장 가까운 미래 경기 순으로 선택합니다. Cloudflare Worker에서 KBO 정규시즌 실제 일정/결과/참고 순위와 PandaScore의 LoL 경기 데이터를 수집하도록 개선했습니다. **Cloudflare 편집기에서 별도 재배포가 필요합니다.** [Worker v2 업데이트 가이드](docs/WORKER_V2_UPDATE.md). KBO 포스트시즌 대진은 아직 미연동이며 실제 결과를 꾸며서 표시하지 않습니다.
+
 ## 시작하기
 
 1. 이 폴더의 `settings.gradle.kts`를 **Android Studio에서 열기**.
