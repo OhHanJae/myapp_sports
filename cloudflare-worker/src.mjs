@@ -622,6 +622,33 @@ function scoreboardInning(raw) {
     return last ? last+"회" : "";
   } catch { return ""; }
 }
+/** KBO official ScoreBoard.aspx renders live runs and inning server-side.
+ * Do not treat a pre-game 0:0 as a played score. The game ID in the
+ * SAME game's section must match before trusting the result. */
+export function parseOfficialLiveScoreHtml(html) {
+  if(typeof html!=="string" || html.length>1_000_000)return [];
+  const awayMatches=[...html.matchAll(/rptGameList_lblAwayTeamScore_(\d+)[^>]*>([^<]*)<\/span>/gi)];
+  const out=[];
+  for(let i=0;i<awayMatches.length;i++){
+    const a=awayMatches[i], index=a[1],start=a.index;
+    const end=Math.min(html.length,start+6500,awayMatches[i+1]?.index??html.length);
+    const segment=html.slice(start,end);
+    const id=segment.match(/gameId=(\d{8}[A-Z]{4}\d)/i)?.[1];
+    const home=segment.match(new RegExp("rptGameList_lblHomeTeamScore_"+index+"[^>]*>([^<]*)<\\/span>","i"))?.[1];
+    const rawState=segment.match(new RegExp("rptGameList_lblGameState_"+index+"[^>]*>([^<]*)<\\/span>","i"))?.[1]||"";
+    const state=rawState.replace(/<[^>]*>/g,"").trim();
+    const awayScore=numericScore(a[2]),homeScore=numericScore(home);
+    if(!id||awayScore===null||homeScore===null)continue;
+    const running=/\d+\s*회\s*[초말]|경기\s*중/i.test(state);
+    const finished=/종료|콜드/i.test(state);
+    // Only recognized, on-screen playing or finalized scores are trustworthy.
+    if(!running&&!finished)continue;
+    out.push({gameId:id,status:finished?"FINAL":"LIVE",homeScore,awayScore,
+      inning:running?state:""});
+  }
+  return out;
+}
+
 export function normalizeOfficialLiveBoard(raw, game, checkedAt, now=Date.now()) {
   const id=gameIdForKbo(game);
   if (!id || raw?.G_ID!==id || String(raw.code)!=="100") return null;
@@ -646,11 +673,16 @@ async function officialKboLive(fetcher, now, warnings) {
   };
   // Official ASP.NET endpoints may require an initial session cookie.
   let cookie="";
+  let webScores=[];
   try {
-    const home=await fetcher(KBO_OFFICIAL+"/Schedule/ScoreBoard.aspx",{
+    const home=await fetcher(KBO_OFFICIAL+"/Schedule/ScoreBoard.aspx?searchDate="+date,{
       headers:{"User-Agent":headers["User-Agent"]},signal:AbortSignal.timeout(4000)
     });
-    if(home.ok)cookie=str(home.headers?.get("set-cookie")).split(";")[0];
+    if(home.ok){
+      cookie=str(home.headers?.get("set-cookie")).split(";")[0];
+      const html=await home.text();
+      webScores=parseOfficialLiveScoreHtml(html);
+    }
   }catch(e){warnings.push("KBO session: "+str(e.message).slice(0,80));}
   if(cookie)headers.Cookie=cookie;
   const ids=Number(month)>=10?["3,4,5,7"]:["0,9,6"];
@@ -680,6 +712,8 @@ async function officialKboLive(fetcher, now, warnings) {
   const checkedAt=isoKst(new Date(now).toISOString());
   const matches=await Promise.all(today.map(async game=>{
     const id=gameIdForKbo(game);
+    const web=webScores.find(score=>score.gameId===id);
+    if(web)return {...game,...web,checkedAt};
     // The KBO API uses 3/4/5/7 for WC/SF/PO/KS and 0 for regular.
     const srId={"와일드카드":3,"준플레이오프":4,"플레이오프":5,"한국시리즈":7}[game.stage]??0;
     if(!id || game.home==="TBD" || game.away==="TBD")return {...game,checkedAt};
