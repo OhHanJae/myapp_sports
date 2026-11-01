@@ -17,8 +17,10 @@ jobs:
       # setup-android@v3 tries to install retired 'tools' package on newer SDK indexes.
       - name: Install Android 36 SDK
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+          SDKMANAGER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)
+          test -n "$SDKMANAGER" || { echo 'Android sdkmanager not installed'; exit 1; }
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0'
       - run: chmod +x ./gradlew && ./gradlew :core:smokeTest :phone:assembleDebug :wear:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
