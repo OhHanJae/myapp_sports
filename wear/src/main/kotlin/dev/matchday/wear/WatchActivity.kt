@@ -59,10 +59,11 @@ fun WatchApp() {
     }
     val startSport = (ctx as? WatchActivity)?.intent?.getStringExtra("sport") ?: "KBO"
     var sport by remember { mutableStateOf(if (startSport == "LOL") "LOL" else "KBO") }
-    var compLol by remember { mutableStateOf("LCK") }
+    var compLol by remember { mutableStateOf(feed.activeLolCompetition()) }
     var tab by remember { mutableStateOf("오늘") }
     var offset by remember { mutableIntStateOf(0) }
     var group by remember { mutableStateOf("UPPER") }
+    LaunchedEffect(feed) { compLol = feed.activeLolCompetition() }
     val comp = if (sport == "KBO") "KBO" else compLol
     val accent = if (sport == "KBO") blue else green
     val dark = when(theme) { "DARK" -> true; "LIGHT" -> false; else -> isSystemInDarkTheme() }
@@ -72,7 +73,7 @@ fun WatchApp() {
     val subColor = if (dark) Color(0xFFA6B9C8) else Color(0xFF5B6D7A)
     val day = feed.referenceDay().plusDays(offset.toLong())
     val games = feed.matches(comp)
-    val featured = feed.nearestFavorite(comp, day)
+    val featured = feed.selectTileMatch(listOf(comp), feed.favorite(comp), day)?.game
     // Different tournaments have different brackets: not all have upper/lower groups.
     val bracketGroups = feed.rounds(comp).map { it.group }.distinct()
     val effectiveGroup = if (sport == "KBO") "MAIN" else if (group in bracketGroups) group else bracketGroups.firstOrNull() ?: "MAIN"
@@ -110,7 +111,7 @@ fun WatchApp() {
             }
             when (tab) {
                 "오늘" -> {
-                    item { WatchHeader("응원팀 경기", accent) }
+                    item { WatchHeader(if (featured != null && featured.home != feed.favorite(comp) && featured.away != feed.favorite(comp)) "선택한 대회의 경기" else "응원팀 경기", accent) }
                     if (featured != null) item { WatchGame(feed, featured, card, accent, textColor, subColor, featured = true) }
                     else item { WatchEmpty("등록된 경기가 없습니다", card, textColor) }
                     item { WatchHeader("${day.monthValue}/${day.dayOfMonth} · 전체 경기", accent) }

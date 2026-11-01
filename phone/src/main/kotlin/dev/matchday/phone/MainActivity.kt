@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import dev.matchday.core.Game
 import dev.matchday.core.SportsFeed
+import dev.matchday.core.activeLolCompetition
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -48,7 +49,8 @@ fun MatchdayPhone() {
     val pref = remember { context.getSharedPreferences("matchday_settings", 0) }
     var feed by remember { mutableStateOf(manager.load()) }
     var sport by remember { mutableStateOf("KBO") }
-    var lolComp by remember { mutableStateOf("LCK") }
+    var lolComp by remember { mutableStateOf(feed.activeLolCompetition()) }
+    var lolCompManuallySelected by remember { mutableStateOf(false) }
     var tab by remember { mutableStateOf("오늘") }
     var themeMode by remember { mutableStateOf(pref.getString("theme", "SYSTEM") ?: "SYSTEM") }
     var notificationEnabled by remember { mutableStateOf(ReminderSettings.enabled(context)) }
@@ -58,6 +60,7 @@ fun MatchdayPhone() {
     var message by remember { mutableStateOf("") }
     var detail by remember { mutableStateOf<Game?>(null) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(feed) { if (!lolCompManuallySelected) lolComp = feed.activeLolCompetition() }
     val comp = if (sport == "KBO") "KBO" else lolComp
     val accent = if (sport == "KBO") KboBlue else LolGreen
     val dark = when (themeMode) {
@@ -94,7 +97,7 @@ fun MatchdayPhone() {
         scope.launch {
             isBusy = true
             manager.refresh().fold(
-                onSuccess = { feed = it; chosenDay = it.referenceDay(); ReminderScheduler.update(context, it); message = "실제 경기 피드 갱신 완료 · ${it.updatedAt.take(16)}" },
+                onSuccess = { feed = it; chosenDay = it.referenceDay(); ReminderScheduler.update(context, it); message = "피드 수신 · KBO ${it.matches("KBO").size} / LoL ${it.games.count { g -> g.competition != "KBO" }} 경기 · ${it.updatedAt.take(16)}" },
                 onFailure = { message = "동기화 실패: ${it.message} · 저장된 데이터 유지" }
             )
             isBusy = false
@@ -124,7 +127,7 @@ fun MatchdayPhone() {
                     }
                     if (sport == "LOL") Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         listOf("LCK", "MSI", "EWC", "WORLDS", "FST").forEach { league ->
-                            FilterChip(selected = lolComp == league, onClick = { lolComp = league },
+                            FilterChip(selected = lolComp == league, onClick = { lolComp = league; lolCompManuallySelected = true },
                                 label = { Text(if (league == "WORLDS") "롤드컵" else league) })
                         }
                     }

@@ -6,6 +6,7 @@ import android.util.Log
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import dev.matchday.core.FeedCodec
+import dev.matchday.core.FeedTransfer
 import dev.matchday.core.SportsFeed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -55,7 +56,8 @@ class FeedManager(private val context: Context) {
     /** Both APKs have the same applicationId/signing key; Data Layer handles nearby transfer. */
     fun sendToWatch(json: String) {
         val put = PutDataMapRequest.create("/matchday/feed").apply {
-            dataMap.putString("payload", json)
+            // Compress real-season data before transmitting to Wear OS Data Layer.
+            dataMap.putString("payloadGzip", FeedTransfer.compress(json))
             dataMap.putString("theme", prefs.getString("theme", "SYSTEM") ?: "SYSTEM")
             dataMap.putLong("revision", System.currentTimeMillis())
         }.asPutDataRequest().setUrgent()
