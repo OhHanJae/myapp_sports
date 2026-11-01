@@ -186,7 +186,7 @@ async function fetchLoL(env, fetcher, year, warnings) {
     return { comp, league: list(found).find(l => classifyLeague(l) === comp) };
   }));
   await Promise.all(leagues.filter(x => x.league?.id != null).map(async ({ comp, league }) => {
-    const pages = comp === "LCK" ? [1, 2, 3] : [1, 2];
+    const pages = comp === "LCK" ? [1, 2] : [1];
     const results = await Promise.all(pages.map(page => optional(
       "/leagues/" + encodeURIComponent(league.id) +
       "/matches?sort=-begin_at&per_page=100&page=" + page, env, fetcher, warnings)));
@@ -211,8 +211,10 @@ async function fetchLoL(env, fetcher, year, warnings) {
     const candidates = tournamentCandidates(items);
     const regular = candidates.filter(t => /regular|group|season|round|stage|swiss/i.test(t.name));
     const playoff = candidates.filter(t => /playoff|knockout|bracket|final|quarter|elimination/i.test(t.name) || t.bracket);
+    // Keep within free Workers subrequest budgets and PandaScore 60 req/min burst limit.
+    const maxChecks = comp === "LCK" ? 3 : 2;
     const checkedStandings = new Set();
-    for (const t of [...regular, ...candidates].slice(0, 6)) {
+    for (const t of [...regular, ...candidates].slice(0, maxChecks)) {
       if (checkedStandings.has(t.id)) continue;
       checkedStandings.add(t.id);
       const data = await optional("/tournaments/" + t.id + "/standings?per_page=100", env, fetcher, warnings);
@@ -221,7 +223,7 @@ async function fetchLoL(env, fetcher, year, warnings) {
       if (rows.length > 0) { standings.push(...rows); break; }
     }
     const checkedBrackets = new Set();
-    for (const t of [...playoff, ...candidates].slice(0, 6)) {
+    for (const t of [...playoff, ...candidates].slice(0, maxChecks)) {
       if (checkedBrackets.has(t.id)) continue;
       checkedBrackets.add(t.id);
       const data = await optional("/tournaments/" + t.id + "/brackets?per_page=100", env, fetcher, warnings);
