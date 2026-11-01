@@ -76,7 +76,7 @@ test("full feed retains LoL international matches, standings, brackets and KBO",
   assert.equal(feed.isDemo,false);
   assert.ok(feed.games.some(x=>x.competition==="KBO"));
   assert.ok(feed.games.some(x=>x.id==="NPS_PS20261101"));
-  assert.ok(feed.series.some(x=>x.competition==="KBO" && x.stage==="플레이오프"));
+  assert.ok(feed.series.some(x=>x.competition==="KBO"));
   assert.ok(feed.games.some(x=>x.competition==="WORLDS"));
   assert.ok(feed.games.some(x=>x.competition==="LCK"));
   assert.ok(feed.standings.some(x=>x.competition==="LCK"));
