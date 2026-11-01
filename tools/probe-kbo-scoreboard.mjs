@@ -19,3 +19,18 @@ for(const gameId of ["20261101HTSS0","20261030SSHT0"]){
   }catch(e){console.log(JSON.stringify({gameId,srId,error:String(e).slice(0,120)}));}
  }
 }
+
+// Check if the free official score page has live score data when AJAX detail is not ready.
+for(const url of [
+ "https://www.koreabaseball.com/Schedule/ScoreBoard.aspx",
+ "https://www.koreabaseball.com/Schedule/ScoreBoard.aspx?searchDate=2026-11-01"
+]){
+ try{
+  const r=await fetch(url,{headers:{"User-Agent":ua},signal:AbortSignal.timeout(8000)});
+  const html=await r.text();
+  for(const term of ["20261101HTSS0","KIA","삼성","2회초","scoreBoard","tblScore","INN","현재경기"]){
+   const i=html.indexOf(term);
+   console.log(JSON.stringify({source:"page-probe",url,status:r.status,length:html.length,term,index:i,sample:i<0?"":html.slice(Math.max(0,i-100),i+240).replace(/\s+/g," ").slice(0,350)}));
+  }
+ }catch(e){console.log("page-probe-error",String(e).slice(0,180));}
+}
