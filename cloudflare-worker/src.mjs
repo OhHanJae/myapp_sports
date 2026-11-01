@@ -278,6 +278,103 @@ async function fetchLoL(env, fetcher, year, warnings) {
   }
   return { teams, games: dedup(games), standings, series };
 }
+
+/** Supplemental KBO postseason from Naver's undocumented schedule gateway.
+ * Source is unofficial and can disappear without notice. Never invent fixtures. */
+const NAVER = "https://api-gw.sports.naver.com";
+const NAVER_KBO_CODES = {HT:"KIA",KIA:"KIA",KT:"KT",LG:"LG",NC:"NC",
+  SK:"SSG",SSG:"SSG",OB:"DOO",DOO:"DOO",LT:"LOT",LOT:"LOT",
+  SS:"SAM",SAM:"SAM",WO:"KIW",KIW:"KIW",HH:"HAN",HAN:"HAN"};
+function kboTeamFromNaver(code, name) {
+  const key = str(code).toUpperCase();
+  if (NAVER_KBO_CODES[key]) return NAVER_KBO_CODES[key];
+  const n = str(name).replace(/\s/g,"").toLowerCase();
+  for (const [id, full, short] of KBO_TEAMS)
+    if (n === full.replace(/\s/g,"").toLowerCase() ||
+      n === short.replace(/\s/g,"").toLowerCase()) return id;
+  return null;
+}
+function kboNaverTime(value) {
+  let s = str(value).replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s += ":00";
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) s += "+09:00";
+  if (!Number.isFinite(Date.parse(s))) return null;
+  return s.endsWith("Z") ? isoKst(s) : s;
+}
+export function convertKboPostseason(raw, regularStandings, year) {
+  const ranks = new Map(regularStandings.map(s=>[s.team,s.rank]));
+  const known = list(raw).filter(m=>m?.categoryId==="kbo");
+  const games = known.map(m=>{
+    const home=kboTeamFromNaver(m.homeTeamCode,m.homeTeamName);
+    const away=kboTeamFromNaver(m.awayTeamCode,m.awayTeamName);
+    const dateTime=kboNaverTime(m.gameDateTime);
+    if (!home || !away || !dateTime || m.gameId == null) return null;
+    const code = str(m.statusCode).toUpperCase();
+    const status = code==="RESULT"?"FINAL":code==="STARTED"?"LIVE":
+      code==="CANCEL"?"POSTPONED":code==="SUSPENDED"?"POSTPONED":"UPCOMING";
+    const homeScore = status==="UPCOMING" ? null :
+      m.homeTeamScore == null ? null : num(m.homeTeamScore);
+    const awayScore = status==="UPCOMING" ? null :
+      m.awayTeamScore == null ? null : num(m.awayTeamScore);
+    const bestRank = Math.min(ranks.get(home)??99,ranks.get(away)??99);
+    const roundIndex = bestRank===1?3:bestRank===2?2:bestRank===3?1:0;
+    const stage = ["와일드카드","준플레이오프","플레이오프","한국시리즈"][roundIndex];
+    const sortedTeams=[home,away].sort((a,b)=>(ranks.get(a)??99)-(ranks.get(b)??99));
+    const seriesId="KBOPS_"+year+"_"+roundIndex+"_"+sortedTeams.join("_");
+    return { id:"NPS_"+m.gameId,competition:"KBO",season:String(year),
+      dateTime,home,away,status,homeScore,awayScore,stage,
+      venue:str(m.stadium),seriesId };
+  }).filter(Boolean);
+  const map = new Map();
+  for (const game of games) {
+    let entry=map.get(game.seriesId);
+    if (!entry) {
+      entry={ id:game.seriesId,competition:"KBO",stage:game.stage,
+        group:"MAIN",roundIndex:["와일드카드","준플레이오프","플레이오프","한국시리즈"].indexOf(game.stage),
+        left: game.home, right:game.away, leftWins:0,rightWins:0,
+        status:"UPCOMING", scheduled:game.dateTime,
+        bestOf:game.stage==="한국시리즈"?7:game.stage==="와일드카드"?2:5,nextId:"" };
+      if ((ranks.get(entry.left)??99)>(ranks.get(entry.right)??99))
+        [entry.left,entry.right]=[entry.right,entry.left];
+      map.set(game.seriesId,entry);
+    }
+    if(game.status==="FINAL" && game.homeScore!=null && game.awayScore!=null) {
+      const winner=game.homeScore>game.awayScore?game.home:game.awayScore>game.homeScore?game.away:null;
+      if(winner===entry.left) entry.leftWins++;
+      if(winner===entry.right) entry.rightWins++;
+    }
+  }
+  const series=[...map.values()].sort((a,b)=>a.roundIndex-b.roundIndex);
+  for(const entry of series) {
+    const matches=games.filter(g=>g.seriesId===entry.id).sort((a,b)=>a.dateTime.localeCompare(b.dateTime));
+    const open=matches.find(g=>g.status==="LIVE"||g.status==="UPCOMING");
+    entry.scheduled=open?.dateTime||matches[0]?.dateTime||"";
+    const target=entry.stage==="한국시리즈"?4:entry.stage==="와일드카드"?2:3;
+    entry.status=entry.leftWins>=target||entry.rightWins>=target?"FINAL":
+      matches.some(g=>g.status==="LIVE")?"LIVE":"UPCOMING";
+    entry.nextId=series.find(s=>s.roundIndex===entry.roundIndex+1)?.id||"";
+  }
+  return {games,series};
+}
+async function fetchKboPostseason(fetcher,year,regularStandings,warnings) {
+  // 2026 postseason is confirmed to begin October 14. For subsequent seasons
+  // verify dates and adjust this range against an official schedule.
+  if(year!==2026) return {games:[],series:[]};
+  const ranges=[["2026-10-14","2026-10-31"],["2026-11-01","2026-11-20"]];
+  let rows=[];
+  for(const [from,to] of ranges) {
+    const url=NAVER+"/schedule/games?upperCategoryId=kbaseball&fromDate="+from+"&toDate="+to;
+    try {
+      const resp=await fetcher(url,{headers:{Accept:"application/json"}});
+      if(!resp.ok) throw new Error("HTTP "+resp.status);
+      const j=await resp.json();
+      if(j.success!==true || !Array.isArray(j.result?.games)) throw new Error("unexpected schema");
+      rows.push(...j.result.games);
+    } catch(e) { warnings.push("KBO postseason (Naver): "+str(e.message).slice(0,90)); }
+  }
+  return convertKboPostseason(rows,regularStandings,year);
+}
+
 export function convertKbo(raw, year) {
   const teams = KBO_TEAMS.map(([id, name, short]) =>
     ({ id, sport: "KBO", name, short, mark: id, logoUrl: "" }));
@@ -328,18 +425,21 @@ export async function buildFeed(env, fetcher = fetch, year = new Date().getUTCFu
     if (!resp.ok) throw new Error("KBO upstream HTTP " + resp.status);
     kbo = convertKbo(await resp.json(), year);
   } catch (e) { warnings.push("KBO: " + str(e.message).slice(0, 120)); }
+  const postseason=await fetchKboPostseason(fetcher,year,kbo.standings,warnings);
+  kbo.games.push(...postseason.games);
+  kbo.series.push(...postseason.series);
   const teamMap = new Map([...kbo.teams, ...lol.teams.values()].map(t => [t.id, t]));
   const games = dedup([...kbo.games, ...lol.games]).sort((a, b) =>
     a.dateTime.localeCompare(b.dateTime));
   if (!games.length) throw new Error("No real fixtures available from either source");
   const stamp = isoKst(new Date().toISOString());
   const standings = [...kbo.standings, ...lol.standings].filter(x => teamMap.has(x.team));
-  const series = lol.series.filter(s => s.left === "TBD" || teamMap.has(s.left))
+  const series = [...kbo.series, ...lol.series].filter(s => s.left === "TBD" || teamMap.has(s.left))
     .filter(s => s.right === "TBD" || teamMap.has(s.right));
   return { schemaVersion: 1, updatedAt: stamp, isDemo: false, demoDay: stamp.slice(0, 10),
     teams: [...teamMap.values()], games, standings, series,
     sources: {
-      KBO: "unofficial GitHub regular-season JSON (no postseason bracket)",
+      KBO: "unofficial GitHub regular-season JSON + optional Naver postseason schedule",
       LOL: "PandaScore", note: "LoL fallback rankings may be computed from available regular-season match results"
     },
     diagnostics: {
