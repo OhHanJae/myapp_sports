@@ -644,6 +644,15 @@ async function officialKboLive(fetcher, now, warnings) {
     "Referer":KBO_OFFICIAL+"/Schedule/Schedule.aspx",
     "Origin":KBO_OFFICIAL,"X-Requested-With":"XMLHttpRequest"
   };
+  // Official ASP.NET endpoints may require an initial session cookie.
+  let cookie="";
+  try {
+    const home=await fetcher(KBO_OFFICIAL+"/Schedule/ScoreBoard.aspx",{
+      headers:{"User-Agent":headers["User-Agent"]},signal:AbortSignal.timeout(4000)
+    });
+    if(home.ok)cookie=str(home.headers?.get("set-cookie")).split(";")[0];
+  }catch(e){warnings.push("KBO session: "+str(e.message).slice(0,80));}
+  if(cookie)headers.Cookie=cookie;
   const ids=Number(month)>=10?["3,4,5,7"]:["0,9,6"];
   if(month==="10")ids.push("0,9,6"); // October can include regular-season makeup games.
   const schedules=await Promise.all(ids.map(async srIdList=>{
