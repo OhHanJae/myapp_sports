@@ -147,7 +147,7 @@ test("feed endpoint denies incorrect key; health never exposes secrets",async()=
   assert.equal(health.status,200);
   const j=await health.json();
   assert.equal(j.keyConfigured,true);
-  assert.equal(j.version,3);
+  assert.equal(j.version,4);
   assert.equal(JSON.stringify(j).includes("private"),false);
   const denied=await worker.fetch(new Request("https://fake.workers.dev/feed.json?key=wrong"),env,{});
   assert.equal(denied.status,403);
