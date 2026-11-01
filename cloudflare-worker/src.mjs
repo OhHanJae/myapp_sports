@@ -349,8 +349,14 @@ export function convertKboPostseason(raw, regularStandings, year) {
     const matches=games.filter(g=>g.seriesId===entry.id).sort((a,b)=>a.dateTime.localeCompare(b.dateTime));
     const open=matches.find(g=>g.status==="LIVE"||g.status==="UPCOMING");
     entry.scheduled=open?.dateTime||matches[0]?.dateTime||"";
-    const target=entry.stage==="한국시리즈"?4:entry.stage==="와일드카드"?2:3;
-    entry.status=entry.leftWins>=target||entry.rightWins>=target?"FINAL":
+    // In KBO wildcard, the 4th seed advances with one win (or a tie);
+    // the 5th seed must win two games. Other series are best-of-five/seven.
+    const finished = entry.stage==="와일드카드"
+      ? entry.leftWins>=1 || entry.rightWins>=2 || matches.some(g=>
+          g.status==="FINAL" && g.homeScore!=null && g.homeScore===g.awayScore)
+      : entry.leftWins>=(entry.stage==="한국시리즈"?4:3) ||
+        entry.rightWins>=(entry.stage==="한국시리즈"?4:3);
+    entry.status=finished?"FINAL":
       matches.some(g=>g.status==="LIVE")?"LIVE":"UPCOMING";
     entry.nextId=series.find(s=>s.roundIndex===entry.roundIndex+1)?.id||"";
   }
