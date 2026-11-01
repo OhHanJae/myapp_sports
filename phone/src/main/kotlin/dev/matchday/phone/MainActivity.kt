@@ -4,6 +4,9 @@ import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -58,6 +61,18 @@ fun MatchdayPhone() {
     var chosenDay by remember { mutableStateOf(feed.referenceDay()) }
     var isBusy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var liveUrl by remember { mutableStateOf(manager.liveUrl()) }
+    var liveCheckedAt by remember { mutableStateOf("") }
+    var liveError by remember { mutableStateOf("") }
+    val lifecycle = (context as? ComponentActivity)?.lifecycle
+    var isVisible by remember { mutableStateOf(lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) ?: true) }
+    DisposableEffect(lifecycle) {
+        val listener = LifecycleEventObserver { _, _ ->
+            isVisible = lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) ?: true
+        }
+        lifecycle?.addObserver(listener)
+        onDispose { lifecycle?.removeObserver(listener) }
+    }
     var detail by remember { mutableStateOf<Game?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(feed) { if (!lolCompManuallySelected) lolComp = feed.activeLolCompetition() }
@@ -97,7 +112,7 @@ fun MatchdayPhone() {
         scope.launch {
             isBusy = true
             manager.refresh().fold(
-                onSuccess = { feed = it; chosenDay = it.referenceDay(); ReminderScheduler.update(context, it); message = "피드 수신 · KBO ${it.matches("KBO").size} / LoL ${it.games.count { g -> g.competition != "KBO" }} 경기 · ${it.updatedAt.take(16)}" },
+                onSuccess = { feed = manager.load(); chosenDay = it.referenceDay(); ReminderScheduler.update(context, it); message = "피드 수신 · KBO ${it.matches("KBO").size} / LoL ${it.games.count { g -> g.competition != "KBO" }} 경기 · ${it.updatedAt.take(16)}" },
                 onFailure = { message = "동기화 실패: ${it.message} · 저장된 데이터 유지" }
             )
             isBusy = false
@@ -108,6 +123,29 @@ fun MatchdayPhone() {
         BackgroundSync.apply(context)
         ReminderScheduler.update(context, feed)
         if (manager.url().isNotBlank()) reload()
+    }
+
+    // The 60-second loop exists only while the Activity is visible.
+    // WorkManager is used separately for best-effort background refresh.
+    LaunchedEffect(isVisible, liveUrl) {
+        if (!isVisible || liveUrl == null) return@LaunchedEffect
+        while (true) {
+            if (!isBusy) {
+                manager.refreshLive().fold(
+                    onSuccess = {
+                        feed = it
+                        liveCheckedAt = java.time.LocalTime.now().toString().take(5)
+                        liveError = ""
+                    },
+                    onFailure = { error ->
+                        liveError = if (error.message?.contains("404") == true)
+                            "Worker v4 코드 배포 필요"
+                        else "실시간 점수 조회 지연"
+                    }
+                )
+            }
+            delay(60_000L)
+        }
     }
 
     MaterialTheme(colorScheme = colors) {
@@ -143,6 +181,14 @@ fun MatchdayPhone() {
             }
         ) { contentPadding ->
             Column(Modifier.fillMaxSize().padding(contentPadding)) {
+                if (!feed.isDemo && liveUrl != null) {
+                    Text(if (liveError.isNotBlank()) "실시간 스코어 · $liveError"
+                        else "실시간 스코어 · 약 60초 자동 조회 (앱 실행 중)" +
+                            if (liveCheckedAt.isBlank()) "" else " · 최근 조회 $liveCheckedAt",
+                        color = if (liveError.isNotBlank()) MaterialTheme.colorScheme.error else accent,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                }
                 if (feed.isDemo) DemoRibbon()
                 if (message.isNotBlank()) {
                     Text(message, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium,
@@ -162,12 +208,13 @@ fun MatchdayPhone() {
                                 message = "HTTPS 주소만 사용할 수 있습니다"
                             } else {
                                 manager.setUrl(link)
+                                liveUrl = manager.liveUrl()
                                 BackgroundSync.apply(context)
                                 if (link.isBlank()) { manager.resetDemo(); feed = manager.load(); chosenDay = feed.referenceDay() }
                                 else reload()
                                 tab = "오늘"
                             }
-                        }, onReset = { manager.resetDemo(); feed = manager.load(); chosenDay = feed.referenceDay();
+                        }, onReset = { manager.resetDemo(); liveUrl = null; feed = manager.load(); chosenDay = feed.referenceDay();
                             BackgroundSync.apply(context); ReminderScheduler.update(context, feed); message = "데모 데이터로 돌아왔습니다" })
                 }
             }
