@@ -24,6 +24,28 @@ fun main(args: Array<String>) {
     check(futureChoice?.game?.id == "t-future" && futureChoice.kind == TileMatchKind.NEXT_GAME)
     check(feed.copy(games = emptyList()).selectTileMatch(listOf("KBO"), "SAM", today) == null)
     check(FeedTransfer.decompress(FeedTransfer.compress(file.readText(Charsets.UTF_8))) == file.readText(Charsets.UTF_8))
+    // Real-score patch should merge into existing feed, and Wear JSON must roundtrip.
+    val source = feed.copy(isDemo = false, updatedAt = "2026-11-01T14:00:00+09:00",
+        games = listOf(future.copy(id = "KBO_TEST", competition = "KBO",
+            dateTime = "2026-11-01T14:00:00+09:00",
+            home = "SAM", away = "KIA", status = "UNKNOWN")))
+    val liveJson = """{"schemaVersion":1,"updatedAt":"2026-11-01T16:15:00+09:00",
+        "games":[{"id":"NEW_PROVIDER_ID","competition":"KBO","season":"2026",
+        "dateTime":"2026-11-01T14:00:00+09:00","home":"SAM","away":"KIA",
+        "status":"LIVE","homeScore":4,"awayScore":3,"inning":"3회",
+        "checkedAt":"2026-11-01T16:15:00+09:00"}],"teams":[]}"""
+    val merged = source.mergeLive(LiveCodec.decode(liveJson))
+    check(merged.games.size == 1) // Match by team/day even when the upstream ID differs.
+    check(merged.games.single().status == "LIVE")
+    check(merged.games.single().homeScore == 4 && merged.games.single().awayScore == 3)
+    check(merged.games.single().inning == "3회")
+    val serialized = FeedCodec.encode(merged)
+    check(FeedCodec.decode(serialized) == merged)
+    check(FeedCodec.decode(FeedCodec.encode(feed)) == feed)
+    val tooOld = source.mergeLive(LiveCodec.decode(liveJson.replace("2026-11-01T16:15:00+09:00",
+        "2026-11-01T13:00:00+09:00")))
+    check(tooOld == source)
+    check(runCatching { LiveCodec.decode("""{"schemaVersion":1,"games":[]}""") }.isFailure)
     check(runCatching { FeedCodec.decode("{}") }.isFailure)
     println("Core smoke test PASS: ${feed.teams.size} teams, ${feed.games.size} games, ${feed.series.size} bracket nodes")
 }
