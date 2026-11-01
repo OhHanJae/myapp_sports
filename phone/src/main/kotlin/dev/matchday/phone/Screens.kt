@@ -97,7 +97,7 @@ fun StandingsScreen(feed: SportsFeed, competition: String) {
                 Text(if (competition == "KBO") "승률" else "득실", modifier = Modifier.width(53.dp), textAlign = TextAlign.End, style = MaterialTheme.typography.labelSmall)
             }
         }
-        if (data.isEmpty()) item { EmptyCard("제공된 순위 데이터가 없습니다", if (competition == "KBO" && !feed.isDemo) "KBO 경기 정보는 별도 데이터 공급원 연결이 필요합니다" else "대회 API에서 순위표를 제공하지 않을 수 있습니다") }
+        if (data.isEmpty()) item { EmptyCard("제공된 순위 데이터가 없습니다", if (competition == "KBO" && !feed.isDemo) "KBO 정규시즌 순위가 아직 수신되지 않았습니다. Cloudflare 피드를 확인하세요" else "대회 API가 순위를 제공하지 않거나, 해당 시즌 데이터가 아직 조회되지 않았습니다") }
         else items(data, key = { "rank_${it.competition}_${it.team}" }) { StandingRow(feed, it, competition) }
         item { Text("로고는 피드의 HTTPS 이미지 URL을 우선 사용하고, 없는 경우 임시 아이콘을 표시합니다.",
             color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 15.dp)) }
@@ -151,7 +151,7 @@ fun BracketScreen(feed: SportsFeed, competition: String) {
                 }
             }
         }
-        if (tree.isEmpty()) item { EmptyCard("대진 정보가 없습니다", if (competition == "KBO" && !feed.isDemo) "KBO는 별도의 공식 데이터 공급원 연결이 필요합니다" else "대회 API에서 아직 대진을 제공하지 않습니다") }
+        if (tree.isEmpty()) item { EmptyCard("대진 정보가 없습니다", if (competition == "KBO" && !feed.isDemo) "KBO 정규시즌 데이터와 별개로 포스트시즌 대진 데이터는 아직 제공되지 않습니다" else "대회 API에서 대진을 제공하지 않거나, 해당 시즌 대진이 발표되지 않았습니다") }
         else item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
                 val rounds = grouped.entries.toList()
