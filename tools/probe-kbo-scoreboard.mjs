@@ -34,3 +34,10 @@ for(const url of [
   }
  }catch(e){console.log("page-probe-error",String(e).slice(0,180));}
 }
+
+// Print the minimal HTML segment containing actual game score/state/ID to design a safe parser.
+try{
+ const html=await (await fetch("https://www.koreabaseball.com/Schedule/ScoreBoard.aspx?searchDate=2026-11-01",{headers:{"User-Agent":ua},signal:AbortSignal.timeout(8000)})).text();
+ const i=html.indexOf("rptGameList_lblAwayTeamScore_0");
+ console.log("LIVE_HTML_SAMPLE",JSON.stringify(html.slice(i-650,i+2600).replace(/\s+/g," ").slice(0,3300)));
+}catch(e){console.log("HTML_ERROR",String(e));}
