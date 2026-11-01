@@ -1,3 +1,5 @@
+> **무료 실시간 스코어 v4:** KBO 공식 스코어보드 웹에서 진행 중 점수·이닝을 확인하고, LoL PandaScore 무료 Fixtures에서 경기 상태·세트 결과를 갱신합니다. Cloudflare는 55초 캐시, 휴대폰이 켜져 있을 때 60초마다 조회하며 워치에 전달합니다. 정확한 실시간 동기화 또는 워치 백그라운드 1분 갱신은 보장하지 않습니다. **[설치 및 한계](docs/LIVE_SCORE_60S.md)**. Worker 코드는 Cloudflare에 수동 재배포해야 합니다.
+
 # MATCHDAY — KBO + LoL 경기 일정 / 순위 / 토너먼트 (Android + Wear OS)
 
 **Kotlin / Jetpack Compose / Wear Compose / Wear Tiles / Wear Data Layer** 로 작성한 Android Studio 프로젝트입니다.

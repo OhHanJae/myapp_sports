@@ -578,13 +578,202 @@ export async function buildFeed(env, fetcher = fetch, year = new Date().getUTCFu
       warnings: [...new Set(warnings)].slice(0, 20)
     } };
 }
+
+/** Low-cost score-only endpoint. Unlike buildFeed(), this never retrieves
+ * every league, standings or complete-season KBO JSON once per minute. */
+export const LIVE_CACHE_SECONDS = 55;
+const KBO_TO_OFFICIAL = { KIA:"HT",KT:"KT",LG:"LG",NC:"NC",SSG:"SK",DOO:"OB",LOT:"LT",
+  SAM:"SS",KIW:"WO",HAN:"HH" };
+const kstDate = ms => new Date(ms + DATE_OFFSET).toISOString().slice(0,10);
+const kstHour = ms => new Date(ms + DATE_OFFSET).getUTCHours();
+function inScoreWindow(ms) {
+  const month = Number(kstDate(ms).slice(5,7));
+  const hour = kstHour(ms);
+  return month >= 3 && month <= 11 && (hour >= 11 || hour <= 1);
+}
+function liveWindow(game, now) {
+  const ms=Date.parse(game.dateTime);
+  return Number.isFinite(ms) && now >= ms - 25*60_000 && now <= ms + 8*60*60_000;
+}
+function gameIdForKbo(game) {
+  // The official schedule can omit its relay link for upcoming/live fixtures.
+  // Reconstruct YYYYMMDD + official away + official home + DH flag.
+  const id=String(game.id||"");
+  const m=id.match(/(\d{8}[A-Z]{4}\d)$/);
+  if(m) return m[1];
+  const away=KBO_TO_OFFICIAL[game.away],home=KBO_TO_OFFICIAL[game.home];
+  const day=game.dateTime.slice(0,10).replaceAll("-","");
+  return away&&home?day+away+home+"0":null;
+}
+const numericScore=value => value === null || value === undefined || value === "" ? null :
+  Number.isFinite(Number(value)) && Number(value)>=0 ? Math.trunc(Number(value)) : null;
+function scoreboardInning(raw) {
+  try {
+    const table = typeof raw.table2 === "string" ? JSON.parse(raw.table2) : raw.table2;
+    const header=list(table?.headers?.[0]?.row);
+    const away=list(table?.rows?.[0]?.row);
+    const home=list(table?.rows?.[1]?.row);
+    let last=0;
+    for(let i=0;i<header.length;i++) {
+      const inning=Number(header[i]?.Text);
+      if(Number.isInteger(inning)&&inning>=1&&inning<=15 &&
+        (numericScore(away[i]?.Text)!==null || numericScore(home[i]?.Text)!==null)) last=inning;
+    }
+    return last ? last+"회" : "";
+  } catch { return ""; }
+}
+/** KBO official ScoreBoard.aspx renders live runs and inning server-side.
+ * Do not treat a pre-game 0:0 as a played score. The game ID in the
+ * SAME game's section must match before trusting the result. */
+export function parseOfficialLiveScoreHtml(html) {
+  if(typeof html!=="string" || html.length>1_000_000)return [];
+  const awayMatches=[...html.matchAll(/rptGameList_lblAwayTeamScore_(\d+)[^>]*>([^<]*)<\/span>/gi)];
+  const out=[];
+  for(let i=0;i<awayMatches.length;i++){
+    const a=awayMatches[i], index=a[1],start=a.index;
+    const end=Math.min(html.length,start+6500,awayMatches[i+1]?.index??html.length);
+    const segment=html.slice(start,end);
+    const id=segment.match(/gameId=(\d{8}[A-Z]{4}\d)/i)?.[1];
+    const home=segment.match(new RegExp("rptGameList_lblHomeTeamScore_"+index+"[^>]*>([^<]*)<\\/span>","i"))?.[1];
+    const rawState=segment.match(new RegExp("rptGameList_lblGameState_"+index+"[^>]*>([^<]*)<\\/span>","i"))?.[1]||"";
+    const state=rawState.replace(/<[^>]*>/g,"").trim();
+    const awayScore=numericScore(a[2]),homeScore=numericScore(home);
+    if(!id||awayScore===null||homeScore===null)continue;
+    const running=/\d+\s*회\s*[초말]|경기\s*중/i.test(state);
+    const finished=/종료|콜드/i.test(state);
+    // Only recognized, on-screen playing or finalized scores are trustworthy.
+    if(!running&&!finished)continue;
+    out.push({gameId:id,status:finished?"FINAL":"LIVE",homeScore,awayScore,
+      inning:running?state:""});
+  }
+  return out;
+}
+
+export function normalizeOfficialLiveBoard(raw, game, checkedAt, now=Date.now()) {
+  const id=gameIdForKbo(game);
+  if (!id || raw?.G_ID!==id || String(raw.code)!=="100") return null;
+  const homeScore=numericScore(raw.B_SCORE_CN),awayScore=numericScore(raw.T_SCORE_CN);
+  if(homeScore===null || awayScore===null) return null;
+  // 'maxInning' is often 15 scoreboard columns, NOT the current inning.
+  const finished=str(raw.END_TM).length>0;
+  const begun=str(raw.START_TM).length>0;
+  const status=finished?"FINAL":begun&&now>=Date.parse(game.dateTime)?"LIVE":game.status;
+  return { ...game, status, homeScore, awayScore,
+    inning: status==="LIVE"?scoreboardInning(raw):"",checkedAt };
+}
+async function officialKboLive(fetcher, now, warnings) {
+  if(!inScoreWindow(now))return [];
+  const date=kstDate(now),year=Number(date.slice(0,4)),month=date.slice(5,7);
+  const headers={
+    "Accept":"application/json, text/html",
+    "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0 Safari/537.36",
+    "Content-Type":"application/x-www-form-urlencoded; charset=UTF-8",
+    "Referer":KBO_OFFICIAL+"/Schedule/Schedule.aspx",
+    "Origin":KBO_OFFICIAL,"X-Requested-With":"XMLHttpRequest"
+  };
+  // Official ASP.NET endpoints may require an initial session cookie.
+  let cookie="";
+  let webScores=[];
+  try {
+    const home=await fetcher(KBO_OFFICIAL+"/Schedule/ScoreBoard.aspx?searchDate="+date,{
+      headers:{"User-Agent":headers["User-Agent"]},signal:AbortSignal.timeout(4000)
+    });
+    if(home.ok){
+      cookie=str(home.headers?.get("set-cookie")).split(";")[0];
+      const html=await home.text();
+      webScores=parseOfficialLiveScoreHtml(html);
+    }
+  }catch(e){warnings.push("KBO session: "+str(e.message).slice(0,80));}
+  if(cookie)headers.Cookie=cookie;
+  const ids=Number(month)>=10?["3,4,5,7"]:["0,9,6"];
+  if(month==="10")ids.push("0,9,6"); // October can include regular-season makeup games.
+  const schedules=await Promise.all(ids.map(async srIdList=>{
+    try{
+      const r=await fetcher(KBO_OFFICIAL+"/ws/Schedule.asmx/GetScheduleList",{
+        method:"POST",headers,signal:AbortSignal.timeout(6000),
+        body:new URLSearchParams({leId:"1",srIdList,seasonId:String(year),gameMonth:month,teamId:""})
+      });
+      if(!r.ok)throw Error("HTTP "+r.status);
+      const raw=await r.json();
+      if(!Array.isArray(raw?.rows))throw Error("invalid schema");
+      const games=parseOfficialKboSchedule(raw,year,Number(month),now);
+      if(srIdList==="0,9,6")return games.map(g=>({
+        id:"KBO_"+g.gameId, competition:"KBO",season:String(year),dateTime:g.gameDateTime,
+        home:g.homeTeamCode,away:g.awayTeamCode,stage:"정규시즌",
+        status:g.statusCode==="RESULT"?"FINAL":g.statusCode==="STARTED"?"LIVE":
+          g.statusCode==="UNCERTAIN"?"UNKNOWN":"UPCOMING",
+        homeScore:g.homeTeamScore,awayScore:g.awayTeamScore,seriesId:""
+      }));
+      return convertKboPostseason(games,[],year).games;
+    }catch(e){warnings.push("KBO live schedule: "+str(e.message).slice(0,100));return [];}
+  }));
+  const today=[...new Map(schedules.flat().filter(g=>liveWindow(g,now))
+    .map(g=>[g.competition+g.home+g.away+g.dateTime,g])).values()];
+  const checkedAt=isoKst(new Date(now).toISOString());
+  const matches=await Promise.all(today.map(async game=>{
+    const id=gameIdForKbo(game);
+    const web=webScores.find(score=>score.gameId===id);
+    if(web)return {...game,...web,checkedAt};
+    // The KBO API uses 3/4/5/7 for WC/SF/PO/KS and 0 for regular.
+    const srId={"와일드카드":3,"준플레이오프":4,"플레이오프":5,"한국시리즈":7}[game.stage]??0;
+    if(!id || game.home==="TBD" || game.away==="TBD")return {...game,checkedAt};
+    try {
+      const r=await fetcher(KBO_OFFICIAL+"/ws/Schedule.asmx/GetScoreBoardScroll",{
+        method:"POST",signal:AbortSignal.timeout(5000),
+        headers:{...headers,Referer:KBO_OFFICIAL+"/Schedule/GameCenter/Main.aspx"},
+        body:new URLSearchParams({leId:"1",srId:String(srId),seasonId:String(year),gameId:id})
+      });
+      if(!r.ok)throw Error("HTTP "+r.status);
+      const board=await r.json();
+      return normalizeOfficialLiveBoard(board,game,checkedAt,now)||{...game,checkedAt};
+    }catch(e){warnings.push("KBO scoreboard: "+str(e.message).slice(0,100));return {...game,checkedAt};}
+  }));
+  return matches;
+}
+async function pandaLive(env,fetcher,now,warnings){
+  const [running,past]=await Promise.all([
+    optional("/lol/matches/running?per_page=100",env,fetcher,warnings),
+    optional("/lol/matches/past?sort=-begin_at&per_page=50",env,fetcher,warnings)
+  ]);
+  const teams=new Map(),games=[];
+  for(const m of dedup([...list(running),...list(past)])){
+    if(m.status!=="running" && m.status!=="finished")continue;
+    if(m.status==="finished"){
+      const ended=Date.parse(m.end_at||m.begin_at||m.scheduled_at);
+      if(!Number.isFinite(ended)||now-ended>12*60*60_000||now-ended<0)continue;
+    }
+    const comp=gameCompetition(m);
+    if(!comp)continue;
+    const game=normalizeMatch(m,comp);
+    if(!game)continue;
+    game.checkedAt=isoKst(new Date(now).toISOString());
+    // No unsupported live in-game stats; score fields may be null.
+    games.push(game);
+    list(m.opponents).forEach(item=>{
+      const t=teamInfo(opponent(item));if(t)teams.set(t.id,t);
+    });
+  }
+  return {games,teams:[...teams.values()]};
+}
+export async function buildLiveFeed(env,fetcher=fetch,now=Date.now()){
+  const warnings=[];
+  const [kbo,lol]=await Promise.all([
+    officialKboLive(fetcher,now,warnings),
+    pandaLive(env,fetcher,now,warnings)
+  ]);
+  const games=dedup([...kbo,...lol.games]);
+  return {schemaVersion:1,updatedAt:isoKst(new Date(now).toISOString()),
+    games,teams:lol.teams,
+    diagnostics:{counts:{KBO:kbo.length,LOL:lol.games.length},warnings:[...new Set(warnings)].slice(0,12)}};
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/health")
-      return jsonResponse({ service:"matchday", ok:true, version:3,
+      return jsonResponse({ service:"matchday", ok:true, version:4,
         keyConfigured: !!(env.PANDASCORE_TOKEN && env.FEED_ACCESS_KEY) });
-    if (url.pathname !== "/feed.json" && url.pathname !== "/status")
+    if (url.pathname !== "/feed.json" && url.pathname !== "/status" && url.pathname !== "/live.json")
       return jsonResponse({ error:"Not found" }, 404);
     if (request.method !== "GET") return jsonResponse({error:"GET only"},405);
     if (!env.PANDASCORE_TOKEN || !env.FEED_ACCESS_KEY)
@@ -592,7 +781,24 @@ export default {
     if (url.searchParams.get("key") !== env.FEED_ACCESS_KEY)
       return jsonResponse({error:"Forbidden"},403);
     const cache = caches.default;
-    const cacheKey = new Request(url.origin + "/__matchday_feed_v3", {method:"GET"});
+    if(url.pathname==="/live.json") {
+      const liveKey=new Request(url.origin+"/__matchday_live_v4",{method:"GET"});
+      let data;
+      const cached=await cache.match(liveKey);
+      if(cached) data=await cached.json();
+      else {
+        try {data=await buildLiveFeed(env);}
+        catch(e){
+          console.error("MATCHDAY live error: "+str(e.message));
+          return jsonResponse({error:"Live data temporarily unavailable"},502);
+        }
+        if(ctx?.waitUntil)ctx.waitUntil(cache.put(liveKey,new Response(JSON.stringify(data),{
+          headers:{"content-type":"application/json","cache-control":"public, max-age="+LIVE_CACHE_SECONDS}
+        })));
+      }
+      return jsonResponse(data);
+    }
+    const cacheKey = new Request(url.origin + "/__matchday_feed_v4", {method:"GET"});
     let feed;
     const stored = await cache.match(cacheKey);
     if (stored) feed = await stored.json();

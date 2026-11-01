@@ -120,6 +120,11 @@ fun GameItem(feed: SportsFeed, game: Game, onClick: () -> Unit) {
                 StatusBadge(game.status)
             }
             MatchRowTeams(feed, game)
+            if (game.status == "LIVE" && (game.inning.isNotBlank() || game.checkedAt.isNotBlank()))
+                Text(listOf(game.inning.takeIf { it.isNotBlank() },
+                    game.checkedAt.takeIf { it.length >= 16 }?.substring(11, 16)?.let { "확인 $it" })
+                    .filterNotNull().joinToString(" · "),
+                    color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
             Text("${game.day()} · ${game.venue.ifBlank { "경기장 미정" }}", color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall)
         }

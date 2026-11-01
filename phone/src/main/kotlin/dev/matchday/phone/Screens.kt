@@ -280,7 +280,7 @@ fun SettingsScreen(
         item {
             OutlinedTextField(value = url, onValueChange = { url = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 label = { Text("데이터 피드 URL") }, placeholder = { Text("https://raw.githubusercontent.com/...") })
-            Text("빈 주소: 기본 데모. 실제 라이브 데이터는 별도의 공급자가 JSON을 갱신해야 합니다.",
+            Text("Cloudflare Worker v4 연결 시 앱 실행 중 약 60초마다 스코어 조회 · 백그라운드는 최소 15분 단위로 운영체제 정책에 따라 지연될 수 있습니다.",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item { Button(onClick = { onSaveUrl(url) }, modifier = Modifier.fillMaxWidth()) { Text("피드 저장 및 새로고침") } }

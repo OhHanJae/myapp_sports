@@ -228,7 +228,8 @@ private fun WatchGame(feed: SportsFeed, g: Game, card: Color, accent: Color, tex
                 Text(feed.team(g.away).short, color = textColor, fontSize = 11.sp, maxLines = 1)
             }
         }
-        Text("${g.day().monthValue}/${g.day().dayOfMonth} · ${g.venue}", color = subColor, fontSize = 9.sp,
+        Text("${g.day().monthValue}/${g.day().dayOfMonth} · " +
+            if (g.status == "LIVE") "${g.inning.ifBlank { "진행 중" }} · ${g.checkedAt.takeIf { it.length >= 16 }?.substring(11,16) ?: "갱신 대기"}" else g.venue, color = subColor, fontSize = 9.sp,
             textAlign = TextAlign.Center, maxLines = 1)
     }
 }
