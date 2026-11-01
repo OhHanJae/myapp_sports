@@ -15,6 +15,11 @@ jobs:
           java-version: '17'
       # Ubuntu GitHub runners include command-line Android SDK tools.
       # setup-android@v3 tries to install retired 'tools' package on newer SDK indexes.
+      # Existing custom Gradle wrapper bytecode targets Java 21; keep JDK 17 for Kotlin toolchain.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - name: Install Android 36 SDK
         run: |
           SDKMANAGER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)
