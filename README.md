@@ -10,6 +10,19 @@
 - **알림**: 기본 OFF, 경기 시작 30분 전/시작 시 선택 가능(폰, WorkManager).
 - **로고/팀 이미지**: 26개 팀에 대한 내장 임시 배지 PNG 포함. 실제 공식 로고는 제공되지 않으며 피드 `logoUrl`을 통해 별도 연결 가능.
 
+## 실제 LoL 경기 API (PandaScore + Cloudflare Worker)
+
+앱 설정에서 이미 배포한 **MATCHDAY Cloudflare Worker**의 피드를 등록하면 데모를 실제 LoL 경기 데이터로 교체합니다. PandaScore 토큰은 앱이나 GitHub에 저장하지 않습니다.
+
+1. Worker의 `/health`에서 `keyConfigured: true` 확인.
+2. 앱 **설정 → 데이터 동기화**에서 `https://YOUR-WORKER.workers.dev/feed.json?key=YOUR-PRIVATE-ACCESS-KEY` 형식의 개인 피드 URL 입력.
+3. **피드 저장 및 새로고침** → **LoL → LCK / MSI / EWC / 롤드컵 / FST** 일정·순위·대진 확인.
+4. 폰에 저장된 피드는 Wear OS Data Layer로 워치 앱/타일에 동기화합니다.
+
+**주의**: KBO 데이터는 PandaScore에 포함되지 않습니다. 별도 KBO API가 연결되기 전에는 실제 경기/순위를 보여줄 수 없습니다. 일부 국제대회는 순위/대진 API가 제공되지 않을 수 있습니다. 민감한 접근 키가 포함된 URL을 GitHub나 이슈에 업로드하지 마세요.
+
+웹 배포/오류 대응 및 데이터 제공 범위: [docs/LIVE_API_SETUP.md](docs/LIVE_API_SETUP.md).
+
 ## 시작하기
 
 1. 이 폴더의 `settings.gradle.kts`를 **Android Studio에서 열기**.
