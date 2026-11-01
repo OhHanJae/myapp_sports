@@ -13,7 +13,8 @@ data class Game(
     val id: String, val competition: String, val season: String,
     val dateTime: String, val home: String, val away: String,
     val status: String, val homeScore: Int? = null, val awayScore: Int? = null,
-    val stage: String = "", val venue: String = "", val seriesId: String = ""
+    val stage: String = "", val venue: String = "", val seriesId: String = "",
+    val inning: String = "", val checkedAt: String = ""
 ) {
     fun day(): LocalDate = OffsetDateTime.parse(dateTime).toLocalDate()
     fun timeText(): String = OffsetDateTime.parse(dateTime).toLocalTime().toString().take(5)
