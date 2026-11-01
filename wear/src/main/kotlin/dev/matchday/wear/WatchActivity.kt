@@ -215,7 +215,7 @@ private fun WatchFallback(team: Team, resource: Int, size: Int) {
 private fun WatchGame(feed: SportsFeed, g: Game, card: Color, accent: Color, textColor: Color, subColor: Color, featured: Boolean = false) {
     Column(Modifier.fillMaxWidth().background(if (featured) accent.copy(alpha = .20f) else card, RoundedCornerShape(15.dp))
         .padding(9.dp), verticalArrangement = Arrangement.spacedBy(5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("${g.stage.ifBlank { g.competition }} · ${when(g.status){"LIVE"->"● LIVE";"FINAL"->"종료";"POSTPONED"->"연기";else->"예정"}}",
+        Text("${g.stage.ifBlank { g.competition }} · ${when(g.status){"LIVE"->"● LIVE";"FINAL"->"종료";"POSTPONED"->"연기";"UNKNOWN"->"상태 미확인";else->"예정"}}",
             color = if (g.status == "LIVE") Color(0xFFFF6C77) else subColor, fontSize = 10.sp)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -242,7 +242,7 @@ private fun WatchBracket(feed: SportsFeed, s: Series, card: Color, accent: Color
         .clickable { expanded = !expanded }.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(s.stage, color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Text(when(s.status){"LIVE"->"LIVE";"FINAL"->"종료";else->"예정"},
+            Text(when(s.status){"LIVE"->"LIVE";"FINAL"->"종료";"UNKNOWN"->"상태 미확인";else->"예정"},
                 color = if (s.status == "LIVE") Color.Red else subColor, fontSize = 10.sp)
         }
         listOf(s.left to s.leftWins, s.right to s.rightWins).forEach { (id,wins) ->
@@ -259,7 +259,7 @@ private fun WatchBracket(feed: SportsFeed, s: Series, card: Color, accent: Color
             if (expanded) games.forEach { game ->
                 Text("${game.day().monthValue}/${game.day().dayOfMonth}  " +
                     "${feed.team(game.home).short} ${game.scoreText()} ${feed.team(game.away).short} · " +
-                    when (game.status) { "LIVE" -> "LIVE"; "FINAL" -> "종료"; else -> "예정" },
+                    when (game.status) { "LIVE" -> "LIVE"; "FINAL" -> "종료"; "UNKNOWN" -> "상태 미확인"; else -> "예정" },
                     color = textColor, fontSize = 10.sp, maxLines = 2)
             }
         }

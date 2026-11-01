@@ -39,6 +39,7 @@ fun statusText(status: String) = when (status) {
     "LIVE" -> "LIVE"
     "FINAL" -> "종료"
     "POSTPONED" -> "연기"
+    "UNKNOWN" -> "상태 미확인"
     else -> "예정"
 }
 
@@ -73,6 +74,7 @@ fun StatusBadge(status: String) {
         "LIVE" -> Color(0xFFF15563)
         "FINAL" -> MaterialTheme.colorScheme.onSurfaceVariant
         "POSTPONED" -> Color(0xFFF3A43B)
+        "UNKNOWN" -> Color(0xFFE4AD55)
         else -> MaterialTheme.colorScheme.primary
     }
     Box(Modifier.background(tint.copy(alpha = 0.16f), RoundedCornerShape(8.dp)).padding(horizontal = 9.dp, vertical = 5.dp)) {

@@ -70,7 +70,7 @@ data class SportsFeed(
         require(teams.map { it.id }.distinct().size == teams.size) { "중복 팀 ID" }
         require(games.map { it.id }.distinct().size == games.size) { "중복 경기 ID" }
         val ids = teams.map { it.id }.toSet() + "TBD"
-        require(games.all { it.home in ids && it.away in ids && it.status in setOf("UPCOMING", "LIVE", "FINAL", "POSTPONED") }) {
+        require(games.all { it.home in ids && it.away in ids && it.status in setOf("UPCOMING", "LIVE", "FINAL", "POSTPONED", "UNKNOWN") }) {
             "경기 팀 ID 또는 상태가 올바르지 않습니다"
         }
         require(series.all { it.left in ids && it.right in ids }) { "대진표 팀 ID 오류" }

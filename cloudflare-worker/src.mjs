@@ -1,7 +1,7 @@
 /**
  * MATCHDAY public-feed Worker v2.
  * Keep PANDASCORE_TOKEN and FEED_ACCESS_KEY in Cloudflare Secret variables.
- * KBO data: https://github.com/dentearl/kbo-data (unofficial, regular season only).
+ * KBO regular-season data: dentearl/kbo-data; postseason: KBO official schedule endpoint.
  * No fictional scores or playoff brackets are generated.
  */
 const PANDA = "https://api.pandascore.co";
@@ -281,13 +281,14 @@ async function fetchLoL(env, fetcher, year, warnings) {
 
 /** Supplemental KBO postseason from Naver's undocumented schedule gateway.
  * Source is unofficial and can disappear without notice. Never invent fixtures. */
-const NAVER = "https://api-gw.sports.naver.com";
+const KBO_OFFICIAL = "https://www.koreabaseball.com";
 const NAVER_KBO_CODES = {HT:"KIA",KIA:"KIA",KT:"KT",LG:"LG",NC:"NC",
   SK:"SSG",SSG:"SSG",OB:"DOO",DOO:"DOO",LT:"LOT",LOT:"LOT",
   SS:"SAM",SAM:"SAM",WO:"KIW",KIW:"KIW",HH:"HAN",HAN:"HAN"};
 function kboTeamFromNaver(code, name) {
   const key = str(code).toUpperCase();
   if (NAVER_KBO_CODES[key]) return NAVER_KBO_CODES[key];
+  if (/PO\s*승리팀|플레이오프\s*승리팀/i.test(str(name))) return "TBD";
   const n = str(name).replace(/\s/g,"").toLowerCase();
   for (const [id, full, short] of KBO_TEAMS)
     if (n === full.replace(/\s/g,"").toLowerCase() ||
@@ -302,7 +303,11 @@ function kboNaverTime(value) {
   return s.endsWith("Z") ? isoKst(s) : s;
 }
 export function convertKboPostseason(raw, regularStandings, year) {
-  const ranks = new Map(regularStandings.map(s=>[s.team,s.rank]));
+  // Postseason seeds are known for 2026. Prefer the official playoff seeds
+  // over potentially incomplete cached regular-season standings.
+  const ranks = year === 2026
+    ? new Map([["KT", 1], ["SAM", 2], ["KIA", 3], ["LG", 4], ["DOO", 5]])
+    : new Map(regularStandings.map(s => [s.team, s.rank]));
   const known = list(raw).filter(m=>m?.categoryId==="kbo");
   const games = known.map(m=>{
     const home=kboTeamFromNaver(m.homeTeamCode,m.homeTeamName);
@@ -311,10 +316,11 @@ export function convertKboPostseason(raw, regularStandings, year) {
     if (!home || !away || !dateTime || m.gameId == null) return null;
     const code = str(m.statusCode).toUpperCase();
     const status = code==="RESULT"?"FINAL":code==="STARTED"?"LIVE":
-      code==="CANCEL"?"POSTPONED":code==="SUSPENDED"?"POSTPONED":"UPCOMING";
-    const homeScore = status==="UPCOMING" ? null :
+      code==="CANCEL"?"POSTPONED":code==="SUSPENDED"?"POSTPONED":
+      code==="UNCERTAIN"?"UNKNOWN":"UPCOMING";
+    const homeScore = status==="UPCOMING" || status==="UNKNOWN" ? null :
       m.homeTeamScore == null ? null : num(m.homeTeamScore);
-    const awayScore = status==="UPCOMING" ? null :
+    const awayScore = status==="UPCOMING" || status==="UNKNOWN" ? null :
       m.awayTeamScore == null ? null : num(m.awayTeamScore);
     const bestRank = Math.min(ranks.get(home)??99,ranks.get(away)??99);
     const roundIndex = bestRank===1?3:bestRank===2?2:bestRank===3?1:0;
@@ -347,7 +353,7 @@ export function convertKboPostseason(raw, regularStandings, year) {
   const series=[...map.values()].sort((a,b)=>a.roundIndex-b.roundIndex);
   for(const entry of series) {
     const matches=games.filter(g=>g.seriesId===entry.id).sort((a,b)=>a.dateTime.localeCompare(b.dateTime));
-    const open=matches.find(g=>g.status==="LIVE"||g.status==="UPCOMING");
+    const open=matches.find(g=>g.status==="LIVE"||g.status==="UPCOMING"||g.status==="UNKNOWN");
     entry.scheduled=open?.dateTime||matches[0]?.dateTime||"";
     // In KBO wildcard, the 4th seed advances with one win (or a tie);
     // the 5th seed must win two games. Other series are best-of-five/seven.
@@ -357,28 +363,146 @@ export function convertKboPostseason(raw, regularStandings, year) {
       : entry.leftWins>=(entry.stage==="한국시리즈"?4:3) ||
         entry.rightWins>=(entry.stage==="한국시리즈"?4:3);
     entry.status=finished?"FINAL":
-      matches.some(g=>g.status==="LIVE")?"LIVE":"UPCOMING";
+      matches.some(g=>g.status==="LIVE")?"LIVE":
+      matches.some(g=>g.status==="UNKNOWN")?"UNKNOWN":"UPCOMING";
     entry.nextId=series.find(s=>s.roundIndex===entry.roundIndex+1)?.id||"";
   }
   return {games,series};
 }
-async function fetchKboPostseason(fetcher,year,regularStandings,warnings) {
-  // 2026 postseason is confirmed to begin October 14. For subsequent seasons
-  // verify dates and adjust this range against an official schedule.
-  if(year!==2026) return {games:[],series:[]};
-  const ranges=[["2026-10-14","2026-10-31"],["2026-11-01","2026-11-20"]];
-  let rows=[];
-  for(const [from,to] of ranges) {
-    const url=NAVER+"/schedule/games?upperCategoryId=kbaseball&fromDate="+from+"&toDate="+to;
-    try {
-      const resp=await fetcher(url,{headers:{Accept:"application/json"}});
-      if(!resp.ok) throw new Error("HTTP "+resp.status);
-      const j=await resp.json();
-      if(j.success!==true || !Array.isArray(j.result?.games)) throw new Error("unexpected schema");
-      rows.push(...j.result.games);
-    } catch(e) { warnings.push("KBO postseason (Naver): "+str(e.message).slice(0,90)); }
+
+/** Official KBO schedule API returns HTML-like rows wrapped in JSON.
+ * A pregame 0:0 marked with 'same' is NOT a completed draw; 'REVIEW' links
+ * are the signal for a finalized game. */
+export function parseOfficialKboSchedule(raw, year, month, now = Date.now()) {
+  let lastDay = "";
+  const result = [];
+  const teamText = html => str(html).replace(/<br\s*\/?>/gi, "").replace(/<[^>]*>/g, "").trim();
+  for (const record of list(raw?.rows)) {
+    const cells = list(record?.row);
+    const col = cls => str(cells.find(c => c?.Class === cls)?.Text);
+    const dayText = col("day");
+    if (dayText) lastDay = dayText;
+    const day = /^(\d{1,2})\.(\d{1,2})/.exec(lastDay);
+    const time = teamText(col("time"));
+    const html = col("play");
+    if (!day || !/^\d{1,2}:\d{2}$/.test(time) || !html) continue;
+    const awayLabel = teamText(html.match(/^<span>([\s\S]*?)<\/span>/i)?.[1]);
+    const homeLabel = teamText(html.match(/<\/em>\s*<span>([\s\S]*?)<\/span>/i)?.[1]);
+    const away = kboTeamFromNaver("", awayLabel);
+    const home = kboTeamFromNaver("", homeLabel);
+    if (!home || !away) continue;
+    const mm = String(month).padStart(2, "0");
+    const dd = day[2].padStart(2, "0");
+    const dateTime = year + "-" + mm + "-" + dd + "T" + time + ":00+09:00";
+    const relay = col("relay");
+    const review = /section=REVIEW|btnReview/i.test(relay);
+    const running = !review && /section=RELAY|btnRelay/i.test(relay);
+    const scoreRows = [...html.matchAll(/<span class="(win|lose|same)">(\d+)<\/span>/gi)];
+    const completed = review && scoreRows.length === 2;
+    // Empty relay with "same" 0:0 means scheduled or score not available.
+    const uncertain = !completed && !running && now >= Date.parse(dateTime);
+    const statusCode = completed ? "RESULT" : running ? "STARTED" :
+      uncertain ? "UNCERTAIN" : "BEFORE";
+    const gameId = relay.match(/gameId=([A-Za-z0-9]+)/i)?.[1] ||
+      year + mm + dd + "_" + away + "_" + home;
+    result.push({
+      gameId, categoryId: "kbo", gameDateTime: dateTime,
+      homeTeamCode: home, awayTeamCode: away,
+      homeTeamName: homeLabel, awayTeamName: awayLabel,
+      homeTeamScore: completed || running ? Number(scoreRows[1]?.[2] || 0) : null,
+      awayTeamScore: completed || running ? Number(scoreRows[0]?.[2] || 0) : null,
+      statusCode, stadium: ""
+    });
   }
-  return convertKboPostseason(rows,regularStandings,year);
+  return result;
+}
+
+/** A last-verified October 31 snapshot, not live data.
+ * Used only if the official schedule endpoint is unreachable. */
+function confirmed2026Snapshot(now = Date.now()) {
+  const final = (date, time, away, home, awayScore, homeScore) => ({
+    gameId: "CONF_" + date.replaceAll("-", "") + "_" + away + "_" + home,
+    categoryId: "kbo", gameDateTime: date + "T" + time + ":00+09:00",
+    homeTeamCode: home, awayTeamCode: away, homeTeamName: home,
+    awayTeamName: away, homeTeamScore: homeScore, awayTeamScore: awayScore,
+    statusCode: "RESULT", stadium: ""
+  });
+  const fixture = (date, time, away, home) => {
+    const dt = date + "T" + time + ":00+09:00";
+    return {
+      gameId: "CONF_" + date.replaceAll("-", "") + "_" + away + "_" + home,
+      categoryId: "kbo", gameDateTime: dt,
+      homeTeamCode: home, awayTeamCode: away, homeTeamName: home === "TBD" ? "PO승리팀" : home,
+      awayTeamName: away === "TBD" ? "PO승리팀" : away,
+      homeTeamScore: null, awayTeamScore: null,
+      statusCode: now >= Date.parse(dt) ? "UNCERTAIN" : "BEFORE", stadium: ""
+    };
+  };
+  return [
+    final("2026-10-14","18:30","DOO","LG",1,4),
+    final("2026-10-17","14:00","LG","KIA",1,5),
+    final("2026-10-18","14:00","LG","KIA",3,6),
+    final("2026-10-20","18:30","KIA","LG",13,1),
+    final("2026-10-26","18:30","KIA","SAM",5,1),
+    final("2026-10-27","18:30","KIA","SAM",3,8),
+    final("2026-10-29","18:30","SAM","KIA",6,4),
+    final("2026-10-30","18:30","SAM","KIA",2,4),
+    fixture("2026-11-01","14:00","KIA","SAM"),
+    fixture("2026-11-03","18:30","TBD","KT"),
+    fixture("2026-11-04","18:30","TBD","KT"),
+    fixture("2026-11-06","18:30","KT","TBD"),
+    fixture("2026-11-07","14:00","KT","TBD"),
+    fixture("2026-11-08","14:00","KT","TBD"),
+    fixture("2026-11-10","18:30","TBD","KT"),
+    fixture("2026-11-11","18:30","TBD","KT")
+  ];
+}
+async function fetchKboPostseason(fetcher, year, regularStandings, warnings) {
+  if (year < 2026) return { games: [], series: [], source: "not requested" };
+  const headers = {
+    "Accept": "application/json, text/html",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0 Safari/537.36"
+  };
+  let cookie = "";
+  let months = [];
+  try {
+    const page = await fetcher(KBO_OFFICIAL + "/Schedule/Schedule.aspx", {
+      headers, signal: AbortSignal.timeout(6000)
+    });
+    if (!page.ok) throw new Error("KBO official homepage HTTP " + page.status);
+    cookie = str(page.headers.get("set-cookie")).split(";")[0];
+  } catch (err) {
+    warnings.push("KBO official homepage: " + str(err.message).slice(0, 95));
+  }
+  await Promise.all(["10", "11"].map(async month => {
+    try {
+      const r = await fetcher(KBO_OFFICIAL + "/ws/Schedule.asmx/GetScheduleList", {
+        method: "POST", signal: AbortSignal.timeout(6000),
+        headers: {
+          ...headers, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "Referer": KBO_OFFICIAL + "/Schedule/Schedule.aspx",
+          "Origin": KBO_OFFICIAL, "X-Requested-With": "XMLHttpRequest",
+          ...(cookie ? { Cookie: cookie } : {})
+        },
+        body: new URLSearchParams({
+          leId: "1", srIdList: "3,4,5,7", seasonId: String(year), gameMonth: month, teamId: ""
+        })
+      });
+      if (!r.ok) throw new Error("KBO official HTTP " + r.status);
+      const data = await r.json();
+      if (!Array.isArray(data?.rows)) throw new Error("KBO unexpected JSON format");
+      months.push(...parseOfficialKboSchedule(data, year, month));
+    } catch (err) {
+      warnings.push("KBO official " + month + " month: " + str(err.message).slice(0, 95));
+    }
+  }));
+  if (!months.length && year === 2026) {
+    warnings.push("KBO postseason: 2026-10-31 confirmed snapshot; current results unverified");
+    return { ...convertKboPostseason(confirmed2026Snapshot(), regularStandings, year),
+      source: "confirmed snapshot as of 2026-10-31, NOT live" };
+  }
+  return { ...convertKboPostseason(months, regularStandings, year),
+    source: "KBO official monthly postseason schedule" };
 }
 
 export function convertKbo(raw, year) {
@@ -445,11 +569,11 @@ export async function buildFeed(env, fetcher = fetch, year = new Date().getUTCFu
   return { schemaVersion: 1, updatedAt: stamp, isDemo: false, demoDay: stamp.slice(0, 10),
     teams: [...teamMap.values()], games, standings, series,
     sources: {
-      KBO: "unofficial GitHub regular-season JSON + optional Naver postseason schedule",
+      KBO: "GitHub regular-season data + " + postseason.source,
       LOL: "PandaScore", note: "LoL fallback rankings may be computed from available regular-season match results"
     },
     diagnostics: {
-      counts: { KBO: kbo.games.length, LOL: lol.games.length,
+      counts: { KBO: kbo.games.length, KBOPostseason: postseason.games.length, LOL: lol.games.length,
         standings: standings.length, series: series.length },
       warnings: [...new Set(warnings)].slice(0, 20)
     } };
@@ -458,7 +582,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/health")
-      return jsonResponse({ service:"matchday", ok:true, version:2,
+      return jsonResponse({ service:"matchday", ok:true, version:3,
         keyConfigured: !!(env.PANDASCORE_TOKEN && env.FEED_ACCESS_KEY) });
     if (url.pathname !== "/feed.json" && url.pathname !== "/status")
       return jsonResponse({ error:"Not found" }, 404);
@@ -468,7 +592,7 @@ export default {
     if (url.searchParams.get("key") !== env.FEED_ACCESS_KEY)
       return jsonResponse({error:"Forbidden"},403);
     const cache = caches.default;
-    const cacheKey = new Request(url.origin + "/__matchday_feed_v2", {method:"GET"});
+    const cacheKey = new Request(url.origin + "/__matchday_feed_v3", {method:"GET"});
     let feed;
     const stored = await cache.match(cacheKey);
     if (stored) feed = await stored.json();

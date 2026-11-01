@@ -18,7 +18,7 @@
 ```
 
 - 대회 식별자: `KBO`, `LCK`, `MSI`, `EWC`, `WORLDS`, `FST` (FST는 확장 가능)
-- 경기 상태: `UPCOMING`, `LIVE`, `FINAL`, `POSTPONED`
+- 경기 상태: `UPCOMING`, `LIVE`, `FINAL`, `POSTPONED`, `UNKNOWN` (경기 시작 후 상태 미확인)
 - 라운드 그룹: `MAIN` (KBO/녹아웃), `UPPER`, `LOWER`, `GROUP`
 - 모든 팀/경기/시리즈 ID는 서로 일관성을 유지해야 합니다.
 - 시간은 한국 시간 등 ISO-8601 오프셋이 포함되어야 합니다. 예: `+09:00`.
