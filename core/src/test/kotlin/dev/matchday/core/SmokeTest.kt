@@ -23,6 +23,7 @@ fun main(args: Array<String>) {
     val futureChoice = feed.copy(games = listOf(future)).selectTileMatch(listOf("KBO"), "SAM", today)
     check(futureChoice?.game?.id == "t-future" && futureChoice.kind == TileMatchKind.NEXT_GAME)
     check(feed.copy(games = emptyList()).selectTileMatch(listOf("KBO"), "SAM", today) == null)
+    check(FeedTransfer.decompress(FeedTransfer.compress(file.readText(Charsets.UTF_8))) == file.readText(Charsets.UTF_8))
     check(runCatching { FeedCodec.decode("{}") }.isFailure)
     println("Core smoke test PASS: ${feed.teams.size} teams, ${feed.games.size} games, ${feed.series.size} bracket nodes")
 }
