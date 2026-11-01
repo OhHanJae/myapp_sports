@@ -94,7 +94,7 @@ fun MatchdayPhone() {
         scope.launch {
             isBusy = true
             manager.refresh().fold(
-                onSuccess = { feed = it; chosenDay = it.referenceDay(); ReminderScheduler.update(context, it); message = "데이터 갱신 완료" },
+                onSuccess = { feed = it; chosenDay = it.referenceDay(); ReminderScheduler.update(context, it); message = "실제 경기 피드 갱신 완료 · ${it.updatedAt.take(16)}" },
                 onFailure = { message = "동기화 실패: ${it.message} · 저장된 데이터 유지" }
             )
             isBusy = false
@@ -155,7 +155,7 @@ fun MatchdayPhone() {
                             themeMode = it; pref.edit().putString("theme", it).apply(); manager.shareCurrent()
                         }, notificationEnabled, reminderMinutes, onReminder = ::setReminders,
                         existingUrl = manager.url(), onSaveUrl = { link ->
-                            if (link.isNotBlank() && !link.startsWith("https://")) {
+                            if (link.isNotBlank() && !link.startsWith("https://", ignoreCase = true)) {
                                 message = "HTTPS 주소만 사용할 수 있습니다"
                             } else {
                                 manager.setUrl(link)

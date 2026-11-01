@@ -36,7 +36,8 @@ class FeedManager(private val context: Context) {
             val link = url()
             require(link.startsWith("https://", ignoreCase = true)) { "HTTPS 데이터 URL을 설정해 주세요" }
             val parsedUri = Uri.parse(link)
-            require(parsedUri.host != null) { "올바른 HTTPS URL이 아닙니다" }
+            require(parsedUri.host != null && parsedUri.userInfo == null) { "올바른 HTTPS URL이 아닙니다" }
+            require(parsedUri.port == -1 || parsedUri.port == 443) { "표준 HTTPS 포트(443)만 허용합니다" }
             val conn = URL(link).openConnection() as HttpURLConnection
             try {
                 conn.connectTimeout = 7000
