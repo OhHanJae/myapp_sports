@@ -8,6 +8,7 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.WearableListenerService
 import dev.matchday.core.FeedCodec
+import dev.matchday.core.FeedTransfer
 import dev.matchday.core.SportsFeed
 
 const val WEAR_PREFS = "matchday_watch"
@@ -31,7 +32,8 @@ class PhoneDataListener : WearableListenerService() {
             if (event.type != DataEvent.TYPE_CHANGED || event.dataItem.uri.path != "/matchday/feed") continue
             runCatching {
                 val data = DataMapItem.fromDataItem(event.dataItem).dataMap
-                val json = data.getString("payload") ?: return@runCatching
+                val json = data.getString("payloadGzip")?.let(FeedTransfer::decompress)
+                    ?: data.getString("payload") ?: return@runCatching
                 val theme = data.getString("theme") ?: "SYSTEM"
                 WatchFeedStore(this).store(json, theme)
                 TileService.getUpdater(this).requestUpdate(KboTileService::class.java)
