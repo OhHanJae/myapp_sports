@@ -303,7 +303,11 @@ function kboNaverTime(value) {
   return s.endsWith("Z") ? isoKst(s) : s;
 }
 export function convertKboPostseason(raw, regularStandings, year) {
-  const ranks = new Map(regularStandings.map(s=>[s.team,s.rank]));
+  // Postseason seeds are known for 2026. Prefer the official playoff seeds
+  // over potentially incomplete cached regular-season standings.
+  const ranks = year === 2026
+    ? new Map([["KT", 1], ["SAM", 2], ["KIA", 3], ["LG", 4], ["DOO", 5]])
+    : new Map(regularStandings.map(s => [s.team, s.rank]));
   const known = list(raw).filter(m=>m?.categoryId==="kbo");
   const games = known.map(m=>{
     const home=kboTeamFromNaver(m.homeTeamCode,m.homeTeamName);
