@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { classifyLeague, normalizeMatch, convertKbo, buildFeed } from "../src.mjs";
+import worker, { classifyLeague, normalizeMatch, convertKbo, convertKboPostseason, buildFeed } from "../src.mjs";
 
 const team = (id, name, acronym) => ({ id, name, acronym, image_url: "" });
 const gen = team(1, "Gen.G", "GEN"), t1 = team(2, "T1", "T1"), hle = team(3, "Hanwha Life Esports", "HLE");
@@ -25,6 +25,15 @@ const kbo = [{
 const reply = body => ({ok:true,json:async()=>body});
 function fetcher(url) {
   if (url.includes("raw.githubusercontent.com")) return Promise.resolve(reply(kbo));
+  if (url.includes("api-gw.sports.naver.com")) return Promise.resolve(reply({
+    success:true,result:{games:[{
+      gameId:"PS20261101",categoryId:"kbo",
+      gameDateTime:"2026-11-01T14:00:00+09:00",
+      homeTeamCode:"SS",homeTeamName:"삼성",homeTeamScore:2,
+      awayTeamCode:"HT",awayTeamName:"KIA",awayTeamScore:3,
+      statusCode:"RESULT",stadium:"대구"
+    }]}
+  }));
   if (url.includes("/lol/matches/upcoming")) return Promise.resolve(reply([fixtureWorlds]));
   if (url.includes("/lol/matches/running")) return Promise.resolve(reply([]));
   if (url.includes("/lol/matches/past")) return Promise.resolve(reply([]));
@@ -66,12 +75,27 @@ test("full feed retains LoL international matches, standings, brackets and KBO",
   const feed = await buildFeed({PANDASCORE_TOKEN:"not-a-real-token"},fetcher,2026);
   assert.equal(feed.isDemo,false);
   assert.ok(feed.games.some(x=>x.competition==="KBO"));
+  assert.ok(feed.games.some(x=>x.id==="NPS_PS20261101"));
+  assert.ok(feed.series.some(x=>x.competition==="KBO" && x.stage==="플레이오프"));
   assert.ok(feed.games.some(x=>x.competition==="WORLDS"));
   assert.ok(feed.games.some(x=>x.competition==="LCK"));
   assert.ok(feed.standings.some(x=>x.competition==="LCK"));
   assert.ok(feed.series.some(x=>x.competition==="WORLDS"));
   assert.ok(feed.diagnostics.counts.KBO>0);
   assert.ok(feed.diagnostics.counts.LOL>0);
+});
+test("postseason series are derived from actual scheduled results",()=>{
+  const regular = [{team:"KT",rank:1},{team:"SAM",rank:2},{team:"KIA",rank:3}];
+  const r=convertKboPostseason([{
+    gameId:"PO5",categoryId:"kbo",gameDateTime:"2026-11-01T14:00:00+09:00",
+    homeTeamCode:"SS",homeTeamName:"삼성",homeTeamScore:4,
+    awayTeamCode:"HT",awayTeamName:"KIA",awayTeamScore:2,statusCode:"RESULT"
+  }],regular,2026);
+  assert.equal(r.games[0].home,"SAM");
+  assert.equal(r.games[0].away,"KIA");
+  assert.equal(r.series[0].stage,"플레이오프");
+  assert.equal(r.series[0].leftWins,1);
+  assert.equal(r.series[0].group,"MAIN");
 });
 test("feed endpoint denies incorrect key; health never exposes secrets",async()=>{
   const env={PANDASCORE_TOKEN:"testing",FEED_ACCESS_KEY:"private"};
