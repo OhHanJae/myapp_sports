@@ -170,7 +170,7 @@ function dedup(matches) { return [...new Map(matches.filter(x => x?.id != null).
 async function fetchLoL(env, fetcher, year, warnings) {
   const byComp = new Map(COMPETITIONS.map(([id]) => [id, []]));
   const [upcoming, running, past] = await Promise.all([
-    panda("/lol/matches/upcoming?sort=begin_at&per_page=100", env, fetcher),
+    optional("/lol/matches/upcoming?sort=begin_at&per_page=100", env, fetcher, warnings),
     optional("/lol/matches/running?per_page=100", env, fetcher, warnings),
     optional("/lol/matches/past?sort=-begin_at&per_page=100", env, fetcher, warnings)
   ]);
