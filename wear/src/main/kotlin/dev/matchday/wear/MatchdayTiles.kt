@@ -110,7 +110,7 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
                 .addContent(spacer(5f))
                 .addContent(text("${home.short}  VS  ${away.short}", 13f, 0xFFFFFFFF.toInt()))
                 .addContent(spacer(6f))
-                .addContent(text(when(match.status){"LIVE"->"● LIVE";"FINAL"->"경기 종료";else->"경기 예정"}, 13f,
+                .addContent(text(when(match.status){"LIVE"->"● LIVE";"FINAL"->"경기 종료";"UNKNOWN"->"상태 미확인";else->"경기 예정"}, 13f,
                     if(match.status=="LIVE") 0xFFF65C6D.toInt() else accent))
                 .addContent(spacer(5f))
                 .addContent(text("${match.day().monthValue}/${match.day().dayOfMonth} · ${match.competition}", 11f, 0xFFB5C7D8.toInt()))
