@@ -87,7 +87,7 @@ fun StandingsScreen(feed: SportsFeed, competition: String) {
     LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
         item {
             Text("${competitionLabel(competition)} 순위", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("${if (competition == "KBO" || competition == "LCK") "정규시즌 전적" else "예제 그룹/대회 전적"}  ·  ${feed.updatedAt.take(10)}",
+            Text("${if (competition == "KBO" || competition == "LCK") "정규시즌 전적" else "대회 제공 전적"}  ·  ${feed.updatedAt.take(10)}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -97,9 +97,9 @@ fun StandingsScreen(feed: SportsFeed, competition: String) {
                 Text(if (competition == "KBO") "승률" else "득실", modifier = Modifier.width(53.dp), textAlign = TextAlign.End, style = MaterialTheme.typography.labelSmall)
             }
         }
-        if (data.isEmpty()) item { EmptyCard("등록된 순위가 없습니다", "토너먼트 대회는 순위를 제공하지 않을 수 있습니다") }
+        if (data.isEmpty()) item { EmptyCard("제공된 순위 데이터가 없습니다", if (competition == "KBO" && !feed.isDemo) "KBO 경기 정보는 별도 데이터 공급원 연결이 필요합니다" else "대회 API에서 순위표를 제공하지 않을 수 있습니다") }
         else items(data, key = { "rank_${it.competition}_${it.team}" }) { StandingRow(feed, it, competition) }
-        item { Text("팀을 구분하는 이미지는 내장 임시 아이콘입니다. 정식 로고는 피드의 logoUrl로 교체할 수 있습니다.",
+        item { Text("로고는 피드의 HTTPS 이미지 URL을 우선 사용하고, 없는 경우 임시 아이콘을 표시합니다.",
             color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 15.dp)) }
     }
 }
@@ -131,7 +131,7 @@ fun StandingRow(feed: SportsFeed, s: Standing, comp: String) {
 @Composable
 fun BracketScreen(feed: SportsFeed, competition: String) {
     val availableGroups = feed.rounds(competition).map { it.group }.distinct()
-    var group by remember(competition) { mutableStateOf(if ("UPPER" in availableGroups) "UPPER" else "MAIN") }
+    var group by remember(competition, availableGroups) { mutableStateOf(if ("UPPER" in availableGroups) "UPPER" else availableGroups.firstOrNull() ?: "MAIN") }
     var selected by remember(competition) { mutableStateOf<String?>(null) }
     val tree = feed.rounds(competition, group)
     val grouped = tree.groupBy { it.roundIndex }.toSortedMap()
@@ -140,7 +140,7 @@ fun BracketScreen(feed: SportsFeed, competition: String) {
         item {
             Text(if (competition == "KBO") "가을야구 대진표" else "${competitionLabel(competition)} 토너먼트",
                 style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("라운드 → 승리 팀의 다음 진출 경로 표시 · 카드를 누르면 시리즈 결과 확인",
+            Text("라운드별 실제 제공 대진 · 카드를 누르면 시리즈 결과 확인",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (availableGroups.size > 1) item {
@@ -151,7 +151,7 @@ fun BracketScreen(feed: SportsFeed, competition: String) {
                 }
             }
         }
-        if (tree.isEmpty()) item { EmptyCard("대진표 준비 중", "해당 대회 대진 정보가 아직 없습니다") }
+        if (tree.isEmpty()) item { EmptyCard("대진 정보가 없습니다", if (competition == "KBO" && !feed.isDemo) "KBO는 별도의 공식 데이터 공급원 연결이 필요합니다" else "대회 API에서 아직 대진을 제공하지 않습니다") }
         else item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
                 val rounds = grouped.entries.toList()
@@ -193,7 +193,7 @@ fun SeriesCard(feed: SportsFeed, s: Series, selected: Boolean = false, onClick: 
             }
             BracketTeamLine(feed.team(s.left), s.leftWins, s.status, s.leftWins > s.rightWins && s.status == "FINAL")
             BracketTeamLine(feed.team(s.right), s.rightWins, s.status, s.rightWins > s.leftWins && s.status == "FINAL")
-            Text("${s.scheduled.take(10)}  ${s.scheduled.substring(11, 16)}", style = MaterialTheme.typography.labelSmall,
+            Text(if (s.scheduled.length >= 16) "${s.scheduled.take(10)}  ${s.scheduled.substring(11, 16)}" else "일정 미정", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
