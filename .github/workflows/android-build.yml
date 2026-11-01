@@ -26,6 +26,8 @@ jobs:
           test -n "$SDKMANAGER" || { echo 'Android sdkmanager not installed'; exit 1; }
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Test PandaScore and KBO Worker adapters
+        run: node --test cloudflare-worker/test/*.test.mjs
       - run: chmod +x ./gradlew && ./gradlew :core:smokeTest :phone:assembleDebug :wear:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
