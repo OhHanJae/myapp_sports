@@ -10,6 +10,8 @@
 - **알림**: 기본 OFF, 경기 시작 30분 전/시작 시 선택 가능(폰, WorkManager).
 - **로고/팀 이미지**: 26개 팀에 대한 내장 임시 배지 PNG 포함. 실제 공식 로고는 제공되지 않으며 피드 `logoUrl`을 통해 별도 연결 가능.
 
+> **2026 KBO 포스트시즌 업데이트 (Worker v3)**: KBO 공식 홈페이지 포스트시즌 일정·결과(와일드카드/준PO/PO/한국시리즈)를 표시하도록 수정했습니다. 이전 Worker v2는 네이버 스포츠 비공식 API 타임아웃으로 포스트시즌 경기가 비어 있었습니다. Cloudflare Edit code에서 새 Worker를 배포하고 `/health`의 `version:3`을 확인하세요. [배포 방법 및 실시간 상태 주의사항](docs/KBO_POSTSEASON_V3.md).
+
 ## 실제 LoL 경기 API (PandaScore + Cloudflare Worker)
 
 앱 설정에서 이미 배포한 **MATCHDAY Cloudflare Worker**의 피드를 등록하면 데모를 실제 LoL 경기 데이터로 교체합니다. PandaScore 토큰은 앱이나 GitHub에 저장하지 않습니다.
