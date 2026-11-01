@@ -104,10 +104,10 @@ object BackgroundSync {
             wm.cancelUniqueWork("matchday_periodic_sync")
             return
         }
-        val request = PeriodicWorkRequestBuilder<FeedSyncWorker>(30, TimeUnit.MINUTES)
+        val request = PeriodicWorkRequestBuilder<FeedSyncWorker>(15, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
             .build()
-        wm.enqueueUniquePeriodicWork("matchday_periodic_sync", ExistingPeriodicWorkPolicy.KEEP, request)
+        wm.enqueueUniquePeriodicWork("matchday_periodic_sync", ExistingPeriodicWorkPolicy.UPDATE, request)
     }
 }
