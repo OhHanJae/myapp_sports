@@ -27,6 +27,7 @@ import dev.matchday.core.SportsFeed
 import dev.matchday.core.TileMatchChoice
 import dev.matchday.core.TileMatchKind
 import dev.matchday.core.selectTileMatch
+import dev.matchday.core.watchLolFeatured
 import java.time.LocalDate
 
 /** Two separately selectable tiles; both use the latest phone-synced offline cache. */
@@ -42,7 +43,16 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
     private fun chosen(feed: SportsFeed): TileMatchChoice? {
         val comps = if (sport == "KBO") listOf("KBO")
             else listOf("LCK", "MSI", "EWC", "WORLDS", "FST")
-        return feed.selectTileMatch(comps, if (sport == "KBO") "SAM" else "GEN")
+        if (sport == "LOL") {
+            val game = feed.watchLolFeatured() ?: return null
+            val kind = when {
+                game.day() > feed.referenceDay() -> TileMatchKind.NEXT_GAME
+                game.home == "GEN" || game.away == "GEN" -> TileMatchKind.FAVORITE_TODAY
+                else -> TileMatchKind.OTHER_TODAY
+            }
+            return TileMatchChoice(game, kind)
+        }
+        return feed.selectTileMatch(comps, "SAM")
     }
 
     private fun version(feed: SportsFeed): String {
@@ -59,8 +69,7 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
         val comps = if (sport == "KBO") listOf("KBO") else listOf("LCK", "MSI", "EWC", "WORLDS", "FST")
         val today = feed.referenceDay()
         val daily = feed.games.filter { it.competition in comps && it.day() == today }
-        val fav = if (sport == "KBO") "SAM" else "GEN"
-        val match = feed.selectTileMatch(comps, fav, today)
+        val match = chosen(feed)
         val root = tileLayout(feed, daily.size, match, today)
         val tile = TileBuilders.Tile.Builder()
             .setResourcesVersion(version(feed))
@@ -162,7 +171,7 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
 
     private fun tileLayout(feed: SportsFeed, todaysCount: Int, choice: TileMatchChoice?, today: LocalDate): LayoutElementBuilders.LayoutElement {
         val accent = WatchAppearance.colorCode(WatchAppearance.accent(this), sport).toInt()
-        val title = if (choice?.kind == TileMatchKind.NEXT_GAME) {
+        val title = if (sport == "LOL" && choice?.game?.status == "LIVE") "LoL · LIVE" else if (choice?.kind == TileMatchKind.NEXT_GAME) {
             if (sport == "KBO") "KBO · 다음 경기" else "LoL · 다음 경기"
         } else if (sport == "KBO") "KBO · 오늘 ${todaysCount}경기" else "LoL · 오늘 ${todaysCount}경기"
         val clickable = ModifiersBuilders.Clickable.Builder()
