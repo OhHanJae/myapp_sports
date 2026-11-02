@@ -8,6 +8,8 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -15,6 +17,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -27,7 +32,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
-import coil.compose.SubcomposeAsyncImage
+import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
 import dev.matchday.core.*
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -48,59 +54,73 @@ fun WatchApp() {
     val ctx = LocalContext.current
     val prefs = remember { ctx.getSharedPreferences(WEAR_PREFS, 0) }
     var feed by remember { mutableStateOf(WatchFeedStore(ctx).read()) }
-    var theme by remember { mutableStateOf(prefs.getString("theme", "SYSTEM") ?: "SYSTEM") }
+    var theme by remember { mutableStateOf(WatchAppearance.theme(ctx)) }
+    var colorPreset by remember { mutableStateOf(WatchAppearance.accent(ctx)) }
     DisposableEffect(Unit) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _: SharedPreferences, key: String? ->
             if (key == "feed_json") feed = WatchFeedStore(ctx).read()
-            if (key == "theme") theme = prefs.getString("theme", "SYSTEM") ?: "SYSTEM"
+            if (key == "watch_theme" || key == "theme") theme = WatchAppearance.theme(ctx)
+            if (key == "watch_accent") colorPreset = WatchAppearance.accent(ctx)
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
         onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
     val startSport = (ctx as? WatchActivity)?.intent?.getStringExtra("sport") ?: "KBO"
     var sport by remember { mutableStateOf(if (startSport == "LOL") "LOL" else "KBO") }
-    var compLol by remember { mutableStateOf(feed.activeLolCompetition()) }
     var tab by remember { mutableStateOf("오늘") }
     var offset by remember { mutableIntStateOf(0) }
     var group by remember { mutableStateOf("UPPER") }
-    LaunchedEffect(feed) { compLol = feed.activeLolCompetition() }
-    val comp = if (sport == "KBO") "KBO" else compLol
-    val accent = if (sport == "KBO") blue else green
+    val comp = if (sport == "KBO") "KBO" else feed.watchLolCompetition()
+    val accent = WatchAppearance.accentColor(colorPreset, sport)
     val dark = when(theme) { "DARK" -> true; "LIGHT" -> false; else -> isSystemInDarkTheme() }
     val bg = if (dark) Color(0xFF07131E) else Color(0xFFF5F8FB)
     val card = if (dark) Color(0xFF163040) else Color(0xFFE4ECF4)
     val textColor = if (dark) Color.White else Color(0xFF102536)
     val subColor = if (dark) Color(0xFFA6B9C8) else Color(0xFF5B6D7A)
     val day = feed.referenceDay().plusDays(offset.toLong())
-    val games = feed.matches(comp)
-    val featured = feed.selectTileMatch(listOf(comp), feed.favorite(comp), day)?.game
+    // Every LoL tournament is visible together; remove per-league filters.
+    // Dedup IDs before using them as lazy keys to avoid a duplicate-key crash.
+    val games = remember(feed, sport) {
+        (if (sport == "KBO") feed.matches("KBO") else
+            feed.games.filter { it.competition in LOL_COMPETITIONS }.sortedBy { it.dateTime })
+            .distinctBy { it.id }
+    }
+    val featured = if (sport == "KBO")
+        feed.selectTileMatch(listOf("KBO"), "SAM", day)?.game else feed.watchLolFeatured(day)
     // Different tournaments have different brackets: not all have upper/lower groups.
     val bracketGroups = feed.rounds(comp).map { it.group }.distinct()
     val effectiveGroup = if (sport == "KBO") "MAIN" else if (group in bracketGroups) group else bracketGroups.firstOrNull() ?: "MAIN"
-    val rounds = feed.rounds(comp, effectiveGroup)
+    val rounds = feed.rounds(comp, effectiveGroup).distinctBy { it.id }
+    val listState = rememberLazyListState()
+    val focusRequester = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    // Request rotary focus every time a sport or tab changes. Keep touch scrolling too.
+    LaunchedEffect(sport, tab) {
+        listState.scrollToItem(0)
+        focusRequester.requestFocus()
+    }
     MaterialTheme {
-        LazyColumn(Modifier.fillMaxSize().background(bg),
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().background(bg)
+                .onRotaryScrollEvent { event ->
+                    scope.launch { listState.scrollBy(event.verticalScrollPixels * 0.55f) }
+                    true
+                }
+                .focusRequester(focusRequester).focusable(),
+            state = listState,
             contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 20.dp, bottom = 30.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             item { Text("MATCHDAY", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = accent) }
             if (feed.isDemo) item { Text("DEMO · 가상 경기", color = Color(0xFFFFB569), fontSize = 10.sp) }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    WatchChip("KBO", sport == "KBO", blue, card, textColor, Modifier.weight(1f)) { sport = "KBO"; group = "MAIN" }
-                    WatchChip("LoL", sport == "LOL", green, card, textColor, Modifier.weight(1f)) { sport = "LOL"; group = "UPPER" }
+                    WatchChip("KBO", sport == "KBO", accent, card, textColor, Modifier.weight(1f)) { sport = "KBO"; offset = 0; group = "MAIN" }
+                    WatchChip("LoL", sport == "LOL", accent, card, textColor, Modifier.weight(1f)) { sport = "LOL"; offset = 0; group = "UPPER" }
                 }
             }
             if (sport == "LOL") item {
-                // Small screens: break a 5-league selector into two rows.
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("LCK", "MSI", "EWC").forEach { x -> WatchChip(x, compLol == x, green, card, textColor, Modifier.weight(1f)) { compLol = x } }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("WORLDS", "FST").forEach { x -> WatchChip(if (x == "WORLDS") "롤드컵" else x,
-                            compLol == x, green, card, textColor, Modifier.weight(1f)) { compLol = x } }
-                    }
-                }
+                Text("리그 자동 선택 · ${if (featured?.status == "LIVE") "진행 중" else "다음 경기"}: ${comp}",
+                    color = subColor, fontSize = 10.sp, maxLines = 1)
             }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -111,13 +131,17 @@ fun WatchApp() {
             }
             when (tab) {
                 "오늘" -> {
-                    item { WatchHeader(if (featured != null && featured.home != feed.favorite(comp) && featured.away != feed.favorite(comp)) "선택한 대회의 경기" else "응원팀 경기", accent) }
+                    item { WatchHeader(when {
+                        sport == "LOL" && featured?.status == "LIVE" -> "현재 진행 중 · ${featured.competition}"
+                        featured != null && featured.home != feed.favorite(comp) && featured.away != feed.favorite(comp) -> "다른 팀의 경기"
+                        else -> "응원팀 경기"
+                    }, accent) }
                     if (featured != null) item { WatchGame(feed, featured, card, accent, textColor, subColor, featured = true) }
                     else item { WatchEmpty("등록된 경기가 없습니다", card, textColor) }
                     item { WatchHeader("${day.monthValue}/${day.dayOfMonth} · 전체 경기", accent) }
                     val todays = games.filter { it.day() == day }
                     if (todays.isEmpty()) item { WatchEmpty("오늘 경기가 없습니다", card, textColor) }
-                    else items(todays, key = { it.id }) { WatchGame(feed, it, card, accent, textColor, subColor) }
+                    else items(todays, key = { "today_${it.id}" }) { WatchGame(feed, it, card, accent, textColor, subColor) }
                 }
                 "일정" -> {
                     item {
@@ -129,13 +153,18 @@ fun WatchApp() {
                     }
                     val todays = games.filter { it.day() == day }
                     if (todays.isEmpty()) item { WatchEmpty("선택한 날짜에 경기 없음", card, textColor) }
-                    else items(todays, key = { it.id }) { WatchGame(feed, it, card, accent, textColor, subColor) }
+                    else items(todays, key = { "schedule_${it.id}" }) { WatchGame(feed, it, card, accent, textColor, subColor) }
                     item { WatchHeader("앞으로의 일정", accent) }
-                    items(games.filter { it.day() > day }.take(5), key = { "next_${it.id}" }) { WatchGame(feed, it, card, accent, textColor, subColor) }
+                    items(games.filter { it.day() > day }.take(8), key = { "next_${it.id}" }) { WatchGame(feed, it, card, accent, textColor, subColor) }
                 }
                 "순위" -> {
                     item { WatchHeader("$comp 순위", accent) }
+                    // Standings providers may return several stages/seasons for one team.
+                    // Duplicate lazy-item keys can crash only when the user scrolls that far.
                     val table = feed.rankings(comp)
+                        .sortedWith(compareByDescending<Standing> { it.season }.thenBy { it.rank })
+                        .distinctBy { it.team }
+                        .sortedBy { it.rank }
                     if (table.isEmpty()) item { WatchEmpty("현재 순위 정보가 없습니다", card, textColor) }
                     else items(table, key = { "rank_${it.team}" }) { s ->
                         Row(Modifier.fillMaxWidth().background(
@@ -157,15 +186,51 @@ fun WatchApp() {
                     if (sport == "LOL") item {
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             val groups = feed.rounds(comp).map { it.group }.distinct()
-                            groups.forEach { g -> WatchChip(when(g){"UPPER"->"승자조"; "LOWER"->"패자조"; "MAIN"->"결승"; else->g},
+                            groups.distinct().take(3).forEach { g -> WatchChip(when(g){"UPPER"->"승자조"; "LOWER"->"패자조"; "MAIN"->"결승"; else->g},
                                 effectiveGroup == g, accent, card, textColor, Modifier.weight(1f)) { group = g } }
                         }
                     }
                     if (rounds.isEmpty()) item { WatchEmpty("대진표가 준비되지 않았습니다", card, textColor) }
                     else items(rounds, key = { it.id }) { s -> WatchBracket(feed, s, card, accent, textColor, subColor) }
                 }
+                "설정" -> {
+                    item { WatchHeader("워치 색상 테마", accent) }
+                    item { Text("표시 모드", color = subColor, fontSize = 11.sp) }
+                    item {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            WatchAppearance.themes.forEach { (id, label) ->
+                                WatchChip(label, theme == id, accent, card, textColor, Modifier.weight(1f)) {
+                                    WatchAppearance.save(ctx, WatchAppearance.PREF_THEME, id)
+                                }
+                            }
+                        }
+                    }
+                    item { WatchHeader("강조 색상", accent) }
+                    items(WatchAppearance.accents.chunked(2)) { pair ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            pair.forEach { (id, label) ->
+                                WatchChip(label, colorPreset == id, accent, card, textColor,
+                                    Modifier.weight(1f)) {
+                                    WatchAppearance.save(ctx, WatchAppearance.PREF_ACCENT, id)
+                                }
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                    item { Text("폰에서 동기화해도 워치 테마는 유지됩니다", color = subColor, fontSize = 10.sp, textAlign = TextAlign.Center) }
+                }
+
             }
-            item { Text("폰에서 마지막으로 전송된 데이터", color = subColor, fontSize = 9.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp)) }
+            item {
+                WatchChip(if (tab == "설정") "오늘 화면으로" else "⚙ 설정 · 테마 변경",
+                    tab == "설정", accent, card, textColor, Modifier.fillMaxWidth()) {
+                    tab = if (tab == "설정") "오늘" else "설정"
+                }
+            }
+            if (tab != "설정") item {
+                Text("휴대폰에서 동기화한 경기 정보", color = subColor, fontSize = 9.sp,
+                    textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
+            }
         }
     }
 }
@@ -195,19 +260,22 @@ private fun WatchEmpty(title: String, card: Color, textColor: Color) {
 @Composable
 private fun WatchLogo(t: Team, size: Int = 32) {
     val context = LocalContext.current
-    val res = remember(t.id) { context.resources.getIdentifier("team_${t.id.lowercase()}", "drawable", context.packageName) }
-    if (t.logoUrl.startsWith("https://")) {
-        SubcomposeAsyncImage(model = t.logoUrl, contentDescription = t.name,
-            loading = { WatchFallback(t, res, size) }, error = { WatchFallback(t, res, size) },
-            modifier = Modifier.size(size.dp), contentScale = ContentScale.Fit)
-    } else WatchFallback(t, res, size)
-}
-
-@Composable
-private fun WatchFallback(team: Team, resource: Int, size: Int) {
-    if (resource != 0) Image(painterResource(resource), contentDescription = team.name, modifier = Modifier.size(size.dp))
-    else Box(Modifier.size(size.dp).background(Color.Gray, CircleShape), contentAlignment = Alignment.Center) {
-        Text(team.mark.take(2), color = Color.White, fontSize = 9.sp)
+    val localName = t.localBadgeName()
+    val res = remember(localName) {
+        context.resources.getIdentifier(localName, "drawable", context.packageName)
+    }
+    val logo = t.displayLogoUrl()
+    val fallback = painterResource(if (res != 0) res else R.drawable.ic_matchday)
+    // AsyncImage avoids heavy per-item subcomposition of SubcomposeAsyncImage in LazyColumn.
+    // Missing logos, disconnected watch, or HTTP failures fall back to an offline badge.
+    if (logo.isNotEmpty()) {
+        AsyncImage(
+            model = logo, contentDescription = t.name,
+            placeholder = fallback, error = fallback, fallback = fallback,
+            modifier = Modifier.size(size.dp), contentScale = ContentScale.Fit
+        )
+    } else {
+        Image(fallback, contentDescription = t.name, modifier = Modifier.size(size.dp))
     }
 }
 

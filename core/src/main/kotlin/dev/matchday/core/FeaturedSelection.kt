@@ -38,3 +38,30 @@ fun SportsFeed.activeLolCompetition(today: LocalDate = referenceDay()): String {
     if (upcoming != null) return upcoming.competition
     return candidates.maxByOrNull { it.dateTime }?.competition ?: "LCK"
 }
+
+/** The watch has ONE LoL feed, not five separate league tabs. */
+val LOL_COMPETITIONS = listOf("LCK", "MSI", "EWC", "WORLDS", "FST")
+
+/**
+ * A LIVE game always beats a completed favorite game.
+ * Within the same priority, favorite Gen.G is preferred.
+ */
+fun SportsFeed.watchLolFeatured(today: LocalDate = referenceDay()): Game? {
+    val todayMatches = games.filter { it.competition in LOL_COMPETITIONS && it.day() == today }
+    val live = todayMatches.filter { it.status == "LIVE" }
+    val liveFavorite = live.firstOrNull { it.home == "GEN" || it.away == "GEN" }
+    if (liveFavorite != null) return liveFavorite
+    if (live.isNotEmpty()) return live.minByOrNull { it.dateTime }
+    val scheduled = todayMatches.filter { it.status == "UPCOMING" }
+    val nextFavorite = scheduled.firstOrNull { it.home == "GEN" || it.away == "GEN" }
+    if (nextFavorite != null) return nextFavorite
+    if (scheduled.isNotEmpty()) return scheduled.minByOrNull { it.dateTime }
+    val completed = todayMatches.filter { it.status == "FINAL" }
+    if (completed.isNotEmpty()) return completed.maxByOrNull { it.dateTime }
+    return games.filter { it.competition in LOL_COMPETITIONS && it.day() > today &&
+        it.status == "UPCOMING" }.minByOrNull { it.dateTime }
+}
+
+/** Active league for rankings/brackets when a live game exists, otherwise the next game. */
+fun SportsFeed.watchLolCompetition(today: LocalDate = referenceDay()): String =
+    watchLolFeatured(today)?.competition ?: activeLolCompetition(today)

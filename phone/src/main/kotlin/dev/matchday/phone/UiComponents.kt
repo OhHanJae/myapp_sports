@@ -27,6 +27,8 @@ import coil.compose.AsyncImage
 import dev.matchday.core.Game
 import dev.matchday.core.SportsFeed
 import dev.matchday.core.Team
+import dev.matchday.core.displayLogoUrl
+import dev.matchday.core.localBadgeName
 import java.time.LocalDate
 
 val KboBlue = Color(0xFF317EFF)
@@ -46,9 +48,11 @@ fun statusText(status: String) = when (status) {
 @Composable
 fun TeamLogo(team: Team, modifier: Modifier = Modifier, size: Dp = 40.dp) {
     val context = LocalContext.current
-    val localRes = remember(team.id) {
-        context.resources.getIdentifier("team_${team.id.lowercase()}", "drawable", context.packageName)
+    val localName = team.localBadgeName()
+    val localRes = remember(localName) {
+        context.resources.getIdentifier(localName, "drawable", context.packageName)
     }
+    val logo = team.displayLogoUrl()
     val fallback: @Composable () -> Unit = {
         if (localRes != 0) {
             Image(painter = painterResource(localRes), contentDescription = "${team.name} 팀 이미지",
@@ -58,10 +62,10 @@ fun TeamLogo(team: Team, modifier: Modifier = Modifier, size: Dp = 40.dp) {
                 contentAlignment = Alignment.Center) { Text(team.mark.take(3), style = MaterialTheme.typography.labelSmall) }
         }
     }
-    if (team.logoUrl.startsWith("https://")) {
+    if (logo.startsWith("https://")) {
         // Feed providers may supply official/team-licensed logos. A bundled placeholder always exists.
-        androidx.compose.runtime.key(team.id, team.logoUrl) {
-            coil.compose.SubcomposeAsyncImage(model = team.logoUrl, contentDescription = team.name,
+        androidx.compose.runtime.key(team.id, logo) {
+            coil.compose.SubcomposeAsyncImage(model = logo, contentDescription = team.name,
                 loading = { fallback() }, error = { fallback() },
                 modifier = modifier.size(size), contentScale = ContentScale.Fit)
         }
