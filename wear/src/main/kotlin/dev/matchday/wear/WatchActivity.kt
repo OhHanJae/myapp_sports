@@ -131,7 +131,11 @@ fun WatchApp() {
             }
             when (tab) {
                 "오늘" -> {
-                    item { WatchHeader(if (featured != null && featured.home != feed.favorite(comp) && featured.away != feed.favorite(comp)) "선택한 대회의 경기" else "응원팀 경기", accent) }
+                    item { WatchHeader(when {
+                        sport == "LOL" && featured?.status == "LIVE" -> "현재 진행 중 · ${featured.competition}"
+                        featured != null && featured.home != feed.favorite(comp) && featured.away != feed.favorite(comp) -> "다른 팀의 경기"
+                        else -> "응원팀 경기"
+                    }, accent) }
                     if (featured != null) item { WatchGame(feed, featured, card, accent, textColor, subColor, featured = true) }
                     else item { WatchEmpty("등록된 경기가 없습니다", card, textColor) }
                     item { WatchHeader("${day.monthValue}/${day.dayOfMonth} · 전체 경기", accent) }
@@ -155,7 +159,12 @@ fun WatchApp() {
                 }
                 "순위" -> {
                     item { WatchHeader("$comp 순위", accent) }
+                    // Standings providers may return several stages/seasons for one team.
+                    // Duplicate lazy-item keys can crash only when the user scrolls that far.
                     val table = feed.rankings(comp)
+                        .sortedWith(compareByDescending<Standing> { it.season }.thenBy { it.rank })
+                        .distinctBy { it.team }
+                        .sortedBy { it.rank }
                     if (table.isEmpty()) item { WatchEmpty("현재 순위 정보가 없습니다", card, textColor) }
                     else items(table, key = { "rank_${it.team}" }) { s ->
                         Row(Modifier.fillMaxWidth().background(
