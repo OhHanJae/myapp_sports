@@ -46,6 +46,27 @@ fun main(args: Array<String>) {
         "2026-11-01T13:00:00+09:00")))
     check(tooOld == source)
     check(runCatching { LiveCodec.decode("""{"schemaVersion":1,"games":[]}""") }.isFailure)
+    // Official logos are sourced from 2026 KBO CDN, never fictional debug badges.
+    val samsung = feed.team("SAM")
+    check(samsung.displayLogoUrl().endsWith("/emblem_SS.png"))
+    check(feed.team("KIA").displayLogoUrl().endsWith("/emblem_HT.png"))
+    check(feed.teams.filter { it.sport == "KBO" }.all { it.displayLogoUrl().startsWith("https://") })
+    check(feed.team("GEN").localBadgeName() == "team_gen")
+    check(Team("PS_12", "LOL", "T1", "T1", "T1", "").localBadgeName() == "team_t1")
+    check(Team("PS_13", "LOL", "KT Rolster", "KT", "KT", "").localBadgeName() == "team_ktlol")
+    // The watch's combined LoL feed prefers currently LIVE games over an
+    // already completed Gen.G game from a different competition.
+    val liveLol = base.copy(id = "lol-live", competition = "WORLDS",
+        dateTime = "2026-10-30T19:00:00+09:00", home = "T1", away = "BLG", status = "LIVE")
+    val completedGen = base.copy(id = "lol-done", competition = "LCK",
+        dateTime = "2026-10-30T17:00:00+09:00", home = "GEN", away = "HLE", status = "FINAL")
+    val watchLive = feed.copy(games = listOf(completedGen, liveLol))
+    check(watchLive.watchLolFeatured(today)?.id == "lol-live")
+    check(watchLive.watchLolCompetition(today) == "WORLDS")
+    val ongoingGen = liveLol.copy(id = "gen-live", home = "GEN", away = "T1",
+        dateTime = "2026-10-30T20:00:00+09:00")
+    check(watchLive.copy(games = listOf(liveLol, ongoingGen)).watchLolFeatured(today)?.id == "gen-live")
+    check(feed.copy(games = emptyList()).watchLolFeatured(today) == null)
     check(runCatching { FeedCodec.decode("{}") }.isFailure)
     println("Core smoke test PASS: ${feed.teams.size} teams, ${feed.games.size} games, ${feed.series.size} bracket nodes")
 }
