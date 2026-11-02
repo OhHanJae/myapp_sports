@@ -112,10 +112,20 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
                 result.set(resources.build())
             } catch (e: Exception) {
                 android.util.Log.w("MatchdayTile", "Logo loading fallback", e)
-                result.set(ResourceBuilders.Resources.Builder().setVersion(resourceVersion)
-                    .addIdToImageMapping("TBD", ResourceBuilders.ImageResource.Builder()
+                val fallback = ResourceBuilders.Resources.Builder().setVersion(resourceVersion)
+                val selected = choice?.game
+                val ids = if (selected == null) emptyList() else
+                    listOf(selected.home, selected.away).distinct()
+                for (teamId in ids + "TBD") {
+                    val team = feed.team(teamId)
+                    val localId = this@MatchdayTileService.resources.getIdentifier(
+                        team.localBadgeName(), "drawable", packageName)
+                        .takeIf { it != 0 } ?: R.drawable.ic_matchday
+                    fallback.addIdToImageMapping(teamId, ResourceBuilders.ImageResource.Builder()
                         .setAndroidResourceByResId(ResourceBuilders.AndroidImageResourceByResId.Builder()
-                            .setResourceId(R.drawable.ic_matchday).build()).build()).build())
+                            .setResourceId(localId).build()).build())
+                }
+                result.set(fallback.build())
             }
         }
         return result
@@ -131,7 +141,7 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
         val host = url.host.lowercase()
         if (host != "6ptotvmi5753.edge.naverncp.com" &&
             host != "cdn.pandascore.co" && !host.endsWith(".pandascore.co")) return null
-        val conn = url.openConnection() as? HttpURLConnection ?: return null
+        val conn = runCatching { url.openConnection() as? HttpURLConnection }.getOrNull() ?: return null
         try {
             conn.connectTimeout = 1800
             conn.readTimeout = 1800
