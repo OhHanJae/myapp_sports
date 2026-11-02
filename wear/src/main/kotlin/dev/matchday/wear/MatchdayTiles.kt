@@ -89,7 +89,7 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
                             .setInlineResource(ResourceBuilders.InlineImageResource.Builder()
                                 .setData(imageData).build()).build()
                     else {
-                        val id = resources.getIdentifier(team.localBadgeName(), "drawable", packageName)
+                        val id = this@MatchdayTileService.resources.getIdentifier(team.localBadgeName(), "drawable", packageName)
                             .takeIf { it != 0 } ?: R.drawable.ic_matchday
                         ResourceBuilders.ImageResource.Builder()
                             .setAndroidResourceByResId(ResourceBuilders.AndroidImageResourceByResId.Builder()
