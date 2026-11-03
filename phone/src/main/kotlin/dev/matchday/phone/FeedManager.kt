@@ -50,7 +50,9 @@ class FeedManager(private val context: Context) {
             try {
                 conn.connectTimeout = 7000
                 conn.readTimeout = 10000
-                conn.instanceFollowRedirects = true
+                // The URL contains the private feed key in its query string. Do not
+                // forward it to a different host through an HTTP redirect.
+                conn.instanceFollowRedirects = false
                 conn.setRequestProperty("Accept", "application/json")
                 require(conn.responseCode in 200..299) { "HTTP ${conn.responseCode}" }
                 val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use {
@@ -88,11 +90,16 @@ class FeedManager(private val context: Context) {
                     stream.readText().also { require(it.length <= 300_000) { "스코어 피드 용량 초과" } }
                 }
                 val overlay = LiveCodec.decode(body)
-                val base = FeedCodec.decode(readJson())
-                if (overlay.games.isEmpty() || base.isDemo) return@runCatching load()
+                // Start with load(), not the static full-feed cache: it includes the
+                // previous live overlay, so a sparse next response cannot erase scores.
+                val base = load()
+                if (overlay.games.isEmpty() || base.isDemo) return@runCatching base
                 val updated = base.mergeLive(overlay)
-                prefs.edit().putString(KEY_LIVE, body).apply()
-                sendToWatch(FeedCodec.encode(updated))
+                // Persist the merged snapshot itself. Live endpoints are intentionally
+                // sparse and may stop returning a game after it leaves their time window.
+                val mergedJson = FeedCodec.encode(updated)
+                prefs.edit().putString(KEY_FEED, mergedJson).remove(KEY_LIVE).apply()
+                sendToWatch(mergedJson)
                 updated
             } finally { conn.disconnect() }
         }
