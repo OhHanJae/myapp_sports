@@ -51,6 +51,11 @@ fun main(args: Array<String>) {
     check(samsung.displayLogoUrl().endsWith("/emblem_SS.png"))
     check(feed.team("KIA").displayLogoUrl().endsWith("/emblem_HT.png"))
     check(feed.teams.filter { it.sport == "KBO" }.all { it.displayLogoUrl().startsWith("https://") })
+    // Tile outlines are sport-specific even when a watch accent preset changes.
+    check(sportTileBorderColor("KBO") == 0xFF438EFFL)
+    check(sportTileBorderColor("LOL") == 0xFF21CE80L)
+    check(sportTileBorderColor("KBO") != sportTileBorderColor("LOL"))
+    check(feed.team("SAM").localBadgeName() == "team_sam")
     check(feed.team("GEN").localBadgeName() == "team_gen")
     check(Team("PS_12", "LOL", "T1", "T1", "T1", "").localBadgeName() == "team_t1")
     check(Team("PS_13", "LOL", "KT Rolster", "KT", "KT", "").localBadgeName() == "team_ktlol")
