@@ -37,3 +37,13 @@ fun Team.localBadgeName(): String {
     }
     return if (recognized.isNotEmpty()) "team_$recognized" else "team_${id.lowercase()}"
 }
+
+/**
+ * Brand colors for the visible circular border of a Wear tile.
+ * KBO is blue and LoL is green regardless of the user's optional accent preset.
+ */
+fun sportTileBorderColor(sport: String): Long = when (sport.uppercase()) {
+    "KBO" -> 0xFF438EFFL
+    "LOL" -> 0xFF21CE80L
+    else -> 0xFF8A99A8L
+}
