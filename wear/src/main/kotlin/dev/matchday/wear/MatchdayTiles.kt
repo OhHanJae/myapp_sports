@@ -17,6 +17,7 @@ import android.graphics.BitmapFactory
 import dev.matchday.core.Team
 import dev.matchday.core.displayLogoUrl
 import dev.matchday.core.localBadgeName
+import dev.matchday.core.sportTileBorderColor
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -61,7 +62,10 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
         val away = game?.let { feed.team(it.away) }
         val versionKey = listOf(sport, home?.id.orEmpty(), away?.id.orEmpty(),
             home?.displayLogoUrl().orEmpty(), away?.displayLogoUrl().orEmpty()).joinToString(":")
-        return "team-logos-v2-${versionKey.hashCode().toUInt().toString(16)}"
+        // Retry logos once per hour after a transient Wi-Fi/CDN failure, not every
+        // minute. A bumped version also invalidates previous malformed PNG resources.
+        val hourBucket = System.currentTimeMillis() / (60L * 60L * 1000L)
+        return "sport-border-logos-v3-${versionKey.hashCode().toUInt().toString(16)}-$hourBucket"
     }
 
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<TileBuilders.Tile> {
@@ -96,7 +100,12 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
                     val image = if (imageData != null)
                         ResourceBuilders.ImageResource.Builder()
                             .setInlineResource(ResourceBuilders.InlineImageResource.Builder()
-                                .setData(imageData).build()).build()
+                                // This is a compressed 80x80 PNG; supply its native size
+                                // so the renderer can resolve the image reliably.
+                                .setData(imageData)
+                                .setWidthPx(80).setHeightPx(80)
+                                .setFormat(ResourceBuilders.IMAGE_FORMAT_UNDEFINED)
+                                .build()).build()
                     else {
                         val id = this@MatchdayTileService.resources.getIdentifier(team.localBadgeName(), "drawable", packageName)
                             .takeIf { it != 0 } ?: R.drawable.ic_matchday
@@ -141,7 +150,16 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
         val host = url.host.lowercase()
         if (host != "6ptotvmi5753.edge.naverncp.com" &&
             host != "cdn.pandascore.co" && !host.endsWith(".pandascore.co")) return null
-        val conn = runCatching { url.openConnection() as? HttpURLConnection }.getOrNull() ?: return null
+        // Prefer PandaScore's 200px team thumbnail to avoid downloading large
+        // source logos. Leave KBO URLs untouched; both remain HTTPS.
+        val imageUrl = if (host == "cdn.pandascore.co" &&
+            url.path.startsWith("/images/team/image/")) {
+            val i = value.lastIndexOf('/')
+            if (i >= 0 && !value.substring(i + 1).startsWith("thumb_"))
+                value.substring(0, i + 1) + "thumb_" + value.substring(i + 1)
+            else value
+        } else value
+        val conn = runCatching { URL(imageUrl).openConnection() as? HttpURLConnection }.getOrNull() ?: return null
         try {
             conn.connectTimeout = 1800
             conn.readTimeout = 1800
@@ -194,14 +212,28 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
                     .build())
                 .build())
             .build()
+        // Rounded, inset full-tile frame. The border is always the SPORT color:
+        // KBO blue, LoL green. Watch user accent presets still color the text.
+        val borderColor = sportTileBorderColor(sport).toInt()
+        val rounded = ModifiersBuilders.Corner.Builder()
+            .setRadius(DimensionBuilders.dp(96f)).build()
+        val frameModifiers = ModifiersBuilders.Modifiers.Builder()
+            .setClickable(clickable)
+            .setBackground(ModifiersBuilders.Background.Builder()
+                .setColor(ColorBuilders.argb(0xFF091B2B.toInt()))
+                .setCorner(rounded).build())
+            .setBorder(ModifiersBuilders.Border.Builder()
+                .setColor(ColorBuilders.argb(borderColor))
+                .setWidth(DimensionBuilders.dp(2.5f)).build())
+            .build()
         val column = LayoutElementBuilders.Column.Builder()
             .setWidth(DimensionBuilders.expand())
             .setHeight(DimensionBuilders.expand())
             .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
-            .setModifiers(ModifiersBuilders.Modifiers.Builder().setClickable(clickable).build())
-            .addContent(spacer(27f))
-            .addContent(text(title, 15f, 0xFFFFFFFF.toInt()))
-            .addContent(spacer(13f))
+            .setModifiers(frameModifiers)
+            .addContent(spacer(19f))
+            .addContent(text(title, 14f, 0xFFFFFFFF.toInt()))
+            .addContent(spacer(9f))
 
         if (choice == null) {
             column.addContent(text("등록된 경기 일정이 없습니다", 13f, 0xFFFFFFFF.toInt()))
@@ -216,9 +248,9 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
                 .setWidth(DimensionBuilders.wrap())
                 .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
             item.addContent(image(home.id))
-            item.addContent(spacerWidth(7f))
-            item.addContent(text(score, 23f, 0xFFFFFFFF.toInt()))
-            item.addContent(spacerWidth(7f))
+            item.addContent(spacerWidth(6f))
+            item.addContent(text(score, 21f, 0xFFFFFFFF.toInt()))
+            item.addContent(spacerWidth(6f))
             item.addContent(image(away.id))
             column.addContent(text(when (choice.kind) {
                     TileMatchKind.FAVORITE_TODAY -> "응원팀 오늘 경기"
@@ -237,7 +269,17 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
                 .addContent(text("${match.day().monthValue}/${match.day().dayOfMonth} · ${match.competition}", 11f, 0xFFB5C7D8.toInt()))
         }
         if (feed.isDemo) column.addContent(spacer(6f)).addContent(text("DEMO · 실제 경기 아님", 9f, 0xFFFFD498.toInt()))
-        return column.build()
+        // Inset the border from the physical round-screen edge to avoid clipping.
+        return LayoutElementBuilders.Box.Builder()
+            .setWidth(DimensionBuilders.expand())
+            .setHeight(DimensionBuilders.expand())
+            .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
+            .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
+            .setModifiers(ModifiersBuilders.Modifiers.Builder()
+                .setPadding(ModifiersBuilders.Padding.Builder()
+                    .setAll(DimensionBuilders.dp(7f)).build()).build())
+            .addContent(column.build())
+            .build()
     }
 
     private fun text(value: String, size: Float, color: Int) = LayoutElementBuilders.Text.Builder()
@@ -247,7 +289,7 @@ abstract class MatchdayTileService(private val sport: String) : TileService() {
         .setMaxLines(1)
         .build()
     private fun image(id: String) = LayoutElementBuilders.Image.Builder().setResourceId(id)
-        .setWidth(DimensionBuilders.dp(34f)).setHeight(DimensionBuilders.dp(34f)).build()
+        .setWidth(DimensionBuilders.dp(37f)).setHeight(DimensionBuilders.dp(37f)).build()
     private fun spacer(h: Float) = LayoutElementBuilders.Spacer.Builder().setHeight(DimensionBuilders.dp(h)).build()
     private fun spacerWidth(w: Float) = LayoutElementBuilders.Spacer.Builder().setWidth(DimensionBuilders.dp(w)).build()
 }
