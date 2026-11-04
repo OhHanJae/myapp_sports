@@ -54,6 +54,7 @@ fun MatchdayPhone() {
     val manager = remember { FeedManager(context) }
     val pref = remember { context.getSharedPreferences("matchday_settings", 0) }
     var feed by remember { mutableStateOf(manager.load()) }
+    var lastFeedRevision by remember { mutableLongStateOf(manager.feedRevision()) }
     var sport by remember { mutableStateOf("KBO") }
     var lolComp by remember { mutableStateOf(feed.activeLolCompetition()) }
     var lolCompManuallySelected by remember { mutableStateOf(false) }
@@ -80,11 +81,21 @@ fun MatchdayPhone() {
     }
     var detail by remember { mutableStateOf<Game?>(null) }
     val scope = rememberCoroutineScope()
-    // Reflect notification Stop, session timeout or OS teardown while the
-    // Activity remains visible, so its normal 60s polling resumes immediately.
+    // The foreground service and WorkManager write to SharedPreferences from
+    // another lifecycle owner. A Compose state holding manager.load() will NOT
+    // automatically see that write, so observe the lightweight revision key.
+    // This also resumes normal polling when the fast session stops.
     LaunchedEffect(isVisible) {
         while (isVisible) {
             fastBackgroundSync = FastScoreSyncService.isRunning()
+            val revision = manager.feedRevision()
+            if (revision != lastFeedRevision) {
+                lastFeedRevision = revision
+                val refreshed = manager.load()
+                feed = refreshed
+                liveCheckedAt = refreshed.games.mapNotNull { it.checkedAt.takeIf { t -> t.length >= 16 } }
+                    .maxOrNull()?.substring(11, 16) ?: liveCheckedAt
+            }
             delay(5_000L)
         }
     }
