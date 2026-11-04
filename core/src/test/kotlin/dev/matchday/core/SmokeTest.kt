@@ -40,6 +40,43 @@ fun main(args: Array<String>) {
     check(merged.games.single().homeScore == 4 && merged.games.single().awayScore == 3)
     check(merged.games.single().inning == "3회")
     val serialized = FeedCodec.encode(merged)
+    // Regression: production-shaped 2026-11-04 KT vs Samsung response had
+    // a synthetic match ID, a 20:21 observation time (111m after kickoff),
+    // and teams:[] because the full feed owns the team catalog.
+    val observed = """{"schemaVersion":1,"updatedAt":"2026-11-04T20:21:45.221+09:00",
+        "games":[{"id":"NPS_20261104_SAM_KT","competition":"KBO","season":"2026",
+        "dateTime":"2026-11-04T18:30:00+09:00","home":"KT","away":"SAM",
+        "status":"LIVE","homeScore":1,"awayScore":1,"stage":"한국시리즈",
+        "seriesId":"KBOPS_2026_3_KT_SAM","gameId":"20261104SSKT0",
+        "inning":"6회말","checkedAt":"2026-11-04T20:21:45.221+09:00"}],
+        "teams":[],"diagnostics":{"counts":{"KBO":1,"LOL":0},"warnings":[]}}"""
+    val reference = feed.copy(isDemo = false, updatedAt = "2026-11-04T18:30:00+09:00",
+        games = listOf(base.copy(id = "NPS_20261104SSKT0",
+            competition = "KBO", dateTime = "2026-11-04T18:30:00+09:00",
+            home = "KT", away = "SAM", status = "UNKNOWN",
+            homeScore = null, awayScore = null, stage = "한국시리즈")))
+    val reported = reference.mergeLive(LiveCodec.decode(observed))
+    check(reported.games.size == 1)
+    check(reported.games.single().id == "NPS_20261104SSKT0")
+    check(reported.games.single().status == "LIVE")
+    check(reported.games.single().homeScore == 1 && reported.games.single().awayScore == 1)
+    check(reported.games.single().inning == "6회말")
+    check(reported.teams.size == reference.teams.size)
+    // The HTML-only direct scoreboard fallback may report observation time
+    // rather than kickoff. The same unique teams + date still must merge.
+    val observationTime = observed.replace(
+        "\"dateTime\":\"2026-11-04T18:30:00+09:00\"",
+        "\"dateTime\":\"2026-11-04T20:21:45.221+09:00\"")
+    val mergedObservation = reference.mergeLive(LiveCodec.decode(observationTime))
+    check(mergedObservation.games.size == 1)
+    check(mergedObservation.games.single().homeScore == 1)
+    // A doubleheader cannot be joined by team/day alone.
+    val doubleheader = reference.copy(games = listOf(
+        reference.games.single(),
+        reference.games.single().copy(id = "DH_2",
+            dateTime = "2026-11-04T15:00:00+09:00")))
+    check(doubleheader.mergeLive(LiveCodec.decode(observationTime))
+        .games.single { it.id == "NPS_20261104SSKT0" }.homeScore == null)
     check(FeedCodec.decode(serialized) == merged)
     check(FeedCodec.decode(FeedCodec.encode(feed)) == feed)
     val tooOld = source.mergeLive(LiveCodec.decode(liveJson.replace("2026-11-01T16:15:00+09:00",
