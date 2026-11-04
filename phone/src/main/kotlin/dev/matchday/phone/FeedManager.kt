@@ -12,6 +12,8 @@ import dev.matchday.core.mergeLive
 import dev.matchday.core.SportsFeed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -19,9 +21,11 @@ private const val PREFS = "matchday_settings"
 private const val KEY_FEED = "cached_feed"
 private const val KEY_URL = "feed_url"
 private const val KEY_LIVE = "cached_live_overlay"
+private const val KEY_LAST_FULL = "last_successful_full_sync"
 
 /** Local cached JSON is authoritative until a new, validated HTTPS response is received. */
 class FeedManager(private val context: Context) {
+    companion object { private val syncMutex = Mutex() }
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun demoJson(): String = context.assets.open("demo_feed.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
     fun readJson(): String = prefs.getString(KEY_FEED, null) ?: demoJson()
@@ -32,15 +36,25 @@ class FeedManager(private val context: Context) {
     fun load(): SportsFeed = runCatching { applyStoredLive(FeedCodec.decode(readJson())) }
         .getOrElse { FeedCodec.decode(demoJson()) }
     fun url(): String = prefs.getString(KEY_URL, "").orEmpty()
-    fun setUrl(value: String) { prefs.edit().putString(KEY_URL, value.trim()).remove(KEY_LIVE).apply() }
-    fun resetDemo() { prefs.edit().remove(KEY_FEED).remove(KEY_LIVE).remove(KEY_URL).apply(); sendToWatch(demoJson()) }
+    fun setUrl(value: String) {
+        val normalized = value.trim()
+        if (normalized != url()) {
+            prefs.edit().putString(KEY_URL, normalized)
+                .remove(KEY_LIVE).remove(KEY_LAST_FULL).apply()
+        }
+    }
+    fun isFullRefreshDue(intervalMillis: Long): Boolean {
+        val last = prefs.getLong(KEY_LAST_FULL, 0L)
+        return last <= 0L || System.currentTimeMillis() - last >= intervalMillis
+    }
+    fun resetDemo() { prefs.edit().remove(KEY_FEED).remove(KEY_LIVE).remove(KEY_URL).remove(KEY_LAST_FULL).apply(); sendToWatch(demoJson()) }
     fun save(json: String) {
         FeedCodec.decode(json) // Reject invalid feeds before persisting or syncing.
         prefs.edit().putString(KEY_FEED, json).apply()
         sendToWatch(FeedCodec.encode(applyStoredLive(FeedCodec.decode(json))))
     }
     suspend fun refresh(): Result<SportsFeed> = withContext(Dispatchers.IO) {
-        runCatching {
+        syncMutex.withLock { runCatching {
             val link = url()
             require(link.startsWith("https://", ignoreCase = true)) { "HTTPS 데이터 URL을 설정해 주세요" }
             val parsedUri = Uri.parse(link)
@@ -60,9 +74,13 @@ class FeedManager(private val context: Context) {
                 val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use {
                     it.readText().also { data -> require(data.length <= 2_000_000) { "JSON 파일이 너무 큽니다" } }
                 }
-                FeedCodec.decode(body).also { save(body) }
+                FeedCodec.decode(body).also {
+                    save(body)
+                    prefs.edit().putLong(KEY_LAST_FULL, System.currentTimeMillis()).apply()
+                }
             } finally { conn.disconnect() }
         }
+    }
     }
     /** Derive /live.json from the user's existing authenticated /feed.json URL.
      * The API key remains on the exact same host and is never put in GitHub. */
@@ -79,7 +97,7 @@ class FeedManager(private val context: Context) {
 
     /** Cheap foreground-only score polling, without downloading the full season. */
     suspend fun refreshLive(): Result<SportsFeed> = withContext(Dispatchers.IO) {
-        runCatching {
+        syncMutex.withLock { runCatching {
             val link = liveUrl() ?: error("실시간 지원 Cloudflare 피드 URL이 아닙니다")
             val conn = URL(link).openConnection() as HttpURLConnection
             try {
@@ -107,6 +125,7 @@ class FeedManager(private val context: Context) {
         }
     }
 
+    }
     /** Both APKs have the same applicationId/signing key; Data Layer handles nearby transfer. */
     fun sendToWatch(json: String) {
         val put = PutDataMapRequest.create("/matchday/feed").apply {
