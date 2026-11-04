@@ -665,6 +665,32 @@ export function parseOfficialLiveScoreHtml(html) {
   return out;
 }
 
+/**
+ * Build a minimal real-game record from the KBO scoreboard's confirmed
+ * gameId and score. This is independent of GetScheduleList: during the
+ * postseason the schedule may still say "PO winner" (TBD) or time out.
+ *
+ * If the source omits kickoff time, dateTime is the observation timestamp,
+ * never a fabricated scheduled first pitch. The stage makes that explicit.
+ */
+export function officialWebScoreToGame(score, checkedAt, now=Date.now()) {
+  const match=/^(\d{4})(\d{2})(\d{2})([A-Z]{2})([A-Z]{2})(\d)$/.exec(str(score?.gameId));
+  if(!match)return null;
+  const day=match[1]+"-"+match[2]+"-"+match[3];
+  if(day!==kstDate(now))return null; // Avoid replaying a stale scoreboard.
+  const away=NAVER_KBO_CODES[match[4]],home=NAVER_KBO_CODES[match[5]];
+  if(!away||!home||away===home)return null;
+  if(!["LIVE","FINAL"].includes(score.status))return null;
+  const homeScore=numericScore(score.homeScore),awayScore=numericScore(score.awayScore);
+  if(homeScore===null||awayScore===null)return null;
+  return {
+    id:"NPS_"+score.gameId,competition:"KBO",season:match[1],
+    dateTime:checkedAt,home,away,status:score.status,
+    homeScore,awayScore,stage:"공식 실시간 중계 · 시작 시각 미확인",
+    venue:"",seriesId:"",inning:str(score.inning),checkedAt
+  };
+}
+
 export function normalizeOfficialLiveBoard(raw, game, checkedAt, now=Date.now()) {
   const id=gameIdForKbo(game);
   if (!id || raw?.G_ID!==id || String(raw.code)!=="100") return null;
@@ -701,6 +727,13 @@ async function officialKboLive(fetcher, now, warnings) {
     }
   }catch(e){warnings.push("KBO session: "+str(e.message).slice(0,80));}
   if(cookie)headers.Cookie=cookie;
+  // The scoreboard contains verified game IDs, teams and runs. Prefer it
+  // directly: never lose live scores merely because the schedule is stale,
+  // still contains TBD participants, or takes longer than the phone timeout.
+  const checkedAt=isoKst(new Date(now).toISOString());
+  const confirmed=webScores.map(score=>officialWebScoreToGame(score,checkedAt,now))
+    .filter(Boolean);
+  if(confirmed.length)return confirmed;
   const ids=Number(month)>=10?["3,4,5,7"]:["0,9,6"];
   if(month==="10")ids.push("0,9,6"); // October can include regular-season makeup games.
   const schedules=await Promise.all(ids.map(async srIdList=>{
@@ -725,7 +758,6 @@ async function officialKboLive(fetcher, now, warnings) {
   }));
   const today=[...new Map(schedules.flat().filter(g=>liveWindow(g,now))
     .map(g=>[g.competition+g.home+g.away+g.dateTime,g])).values()];
-  const checkedAt=isoKst(new Date(now).toISOString());
   const matches=await Promise.all(today.map(async game=>{
     const id=gameIdForKbo(game);
     const web=webScores.find(score=>score.gameId===id);
@@ -787,7 +819,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/health")
-      return jsonResponse({ service:"matchday", ok:true, version:5,
+      return jsonResponse({ service:"matchday", ok:true, version:6,
         keyConfigured: !!(env.PANDASCORE_TOKEN && env.FEED_ACCESS_KEY) });
     if (url.pathname !== "/feed.json" && url.pathname !== "/status" && url.pathname !== "/live.json")
       return jsonResponse({ error:"Not found" }, 404);
@@ -795,10 +827,13 @@ export default {
     if (!env.PANDASCORE_TOKEN || !env.FEED_ACCESS_KEY)
       return jsonResponse({error:"Secrets missing"},503);
     if (url.searchParams.get("key") !== env.FEED_ACCESS_KEY)
-      return jsonResponse({error:"Forbidden"},403);
+      return jsonResponse({
+        error:"Forbidden",code:"INVALID_FEED_ACCESS_KEY",
+        hint:"Use the same ?key=FEED_ACCESS_KEY value for /feed.json and /live.json"
+      },403);
     const cache = caches.default;
     if(url.pathname==="/live.json") {
-      const liveKey=new Request(url.origin+"/__matchday_live_v4",{method:"GET"});
+      const liveKey=new Request(url.origin+"/__matchday_live_v6",{method:"GET"});
       let data;
       const cached=await cache.match(liveKey);
       if(cached) data=await cached.json();
