@@ -300,7 +300,7 @@ fun SettingsScreen(
         item { SectionTitle("데이터 동기화", "HTTPS JSON") }
         item {
             OutlinedTextField(value = url, onValueChange = { url = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                label = { Text("데이터 피드 URL") }, placeholder = { Text("https://raw.githubusercontent.com/...") })
+                label = { Text("데이터 피드 URL") }, placeholder = { Text("https://...workers.dev/feed.json?key=접근키") })
             Text("Cloudflare Worker v5 연결 시: 앱 실행 중 60초 / 백그라운드 기본 15분 / 빠른 갱신 켜면 최대 5시간 30분 동안 60초 주기.",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
