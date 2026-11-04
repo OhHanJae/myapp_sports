@@ -79,6 +79,14 @@ fun MatchdayPhone() {
     }
     var detail by remember { mutableStateOf<Game?>(null) }
     val scope = rememberCoroutineScope()
+    // Reflect notification Stop, session timeout or OS teardown while the
+    // Activity remains visible, so its normal 60s polling resumes immediately.
+    LaunchedEffect(isVisible) {
+        while (isVisible) {
+            fastBackgroundSync = FastScoreSyncService.isRunning()
+            delay(5_000L)
+        }
+    }
     LaunchedEffect(feed) { if (!lolCompManuallySelected) lolComp = feed.activeLolCompetition() }
     val comp = if (sport == "KBO") "KBO" else lolComp
     val accent = if (sport == "KBO") KboBlue else LolGreen
