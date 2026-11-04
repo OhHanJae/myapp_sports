@@ -248,6 +248,7 @@ private fun SeriesDetail(feed: SportsFeed, s: Series) {
 fun SettingsScreen(
     theme: String, onTheme: (String) -> Unit,
     notifications: Boolean, reminderMinutes: Int, onReminder: (Boolean, Int) -> Unit,
+    fastSyncEnabled: Boolean, onFastSync: (Boolean) -> Unit,
     existingUrl: String, onSaveUrl: (String) -> Unit, onReset: () -> Unit
 ) {
     var url by remember(existingUrl) { mutableStateOf(existingUrl) }
@@ -276,11 +277,31 @@ fun SettingsScreen(
                 FilterChip(selected = reminderMinutes == 0, onClick = { onReminder(true, 0) }, label = { Text("경기 시작 시") })
             }
         }
+        item { SectionTitle("앱 종료 후 자동 동기화", "워치 점수 갱신") }
+        item {
+            Text("기본: 인터넷 연결 시 약 15분마다 일정·실시간 점수를 확인하고 워치에 전달합니다. 앱을 닫아도 자동 실행되지만, 절전·강제 종료 상태에서는 지연되거나 멈출 수 있습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("경기 중 1분 백그라운드 갱신")
+                    Text("알림이 표시되는 빠른 갱신 세션 (최대 5시간 30분)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = fastSyncEnabled, onCheckedChange = onFastSync)
+            }
+            Text("앱 화면을 닫아도 작동하며, 알림의 '갱신 중지'로 끌 수 있습니다. Android 15 이상은 dataSync 서비스가 하루 총 6시간으로 제한됩니다. 세션 종료 후 기본 15분 갱신은 유지됩니다.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         item { SectionTitle("데이터 동기화", "HTTPS JSON") }
         item {
             OutlinedTextField(value = url, onValueChange = { url = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 label = { Text("데이터 피드 URL") }, placeholder = { Text("https://raw.githubusercontent.com/...") })
-            Text("Cloudflare Worker v4 연결 시 앱 실행 중 약 60초마다 스코어 조회 · 백그라운드는 최소 15분 단위로 운영체제 정책에 따라 지연될 수 있습니다.",
+            Text("Cloudflare Worker v5 연결 시: 앱 실행 중 60초 / 백그라운드 기본 15분 / 빠른 갱신 켜면 최대 5시간 30분 동안 60초 주기.",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item { Button(onClick = { onSaveUrl(url) }, modifier = Modifier.fillMaxWidth()) { Text("피드 저장 및 새로고침") } }
