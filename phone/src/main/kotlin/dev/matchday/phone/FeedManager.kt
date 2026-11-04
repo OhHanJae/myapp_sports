@@ -23,6 +23,7 @@ private const val KEY_FEED = "cached_feed"
 private const val KEY_URL = "feed_url"
 private const val KEY_LIVE = "cached_live_overlay"
 private const val KEY_LAST_FULL = "last_successful_full_sync"
+private const val KEY_REVISION = "cached_feed_revision"
 
 /** Local cached JSON is authoritative until a new, validated HTTPS response is received. */
 class FeedManager(private val context: Context) {
@@ -30,6 +31,8 @@ class FeedManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun demoJson(): String = context.assets.open("demo_feed.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
     fun readJson(): String = prefs.getString(KEY_FEED, null) ?: demoJson()
+    /** Tracks cache updates from WorkManager/foreground service/Activity. */
+    fun feedRevision(): Long = prefs.getLong(KEY_REVISION, 0L)
     private fun applyStoredLive(base: SportsFeed): SportsFeed =
         prefs.getString(KEY_LIVE, null)?.let { json ->
             runCatching { base.mergeLive(LiveCodec.decode(json)) }.getOrNull()
@@ -48,10 +51,15 @@ class FeedManager(private val context: Context) {
         val last = prefs.getLong(KEY_LAST_FULL, 0L)
         return last <= 0L || System.currentTimeMillis() - last >= intervalMillis
     }
-    fun resetDemo() { prefs.edit().remove(KEY_FEED).remove(KEY_LIVE).remove(KEY_URL).remove(KEY_LAST_FULL).apply(); sendToWatch(demoJson()) }
+    fun resetDemo() {
+        prefs.edit().remove(KEY_FEED).remove(KEY_LIVE).remove(KEY_URL)
+            .remove(KEY_LAST_FULL).putLong(KEY_REVISION, feedRevision() + 1L).apply()
+        sendToWatch(demoJson())
+    }
     fun save(json: String) {
         FeedCodec.decode(json) // Reject invalid feeds before persisting or syncing.
-        prefs.edit().putString(KEY_FEED, json).apply()
+        prefs.edit().putString(KEY_FEED, json)
+            .putLong(KEY_REVISION, feedRevision() + 1L).apply()
         sendToWatch(FeedCodec.encode(applyStoredLive(FeedCodec.decode(json))))
     }
     suspend fun refresh(): Result<SportsFeed> = withContext(Dispatchers.IO) {
@@ -114,7 +122,8 @@ class FeedManager(private val context: Context) {
                 // Persist the merged snapshot itself. Live endpoints are intentionally
                 // sparse and may stop returning a game after it leaves their time window.
                 val mergedJson = FeedCodec.encode(updated)
-                prefs.edit().putString(KEY_FEED, mergedJson).remove(KEY_LIVE).apply()
+                prefs.edit().putString(KEY_FEED, mergedJson).remove(KEY_LIVE)
+                    .putLong(KEY_REVISION, feedRevision() + 1L).apply()
                 sendToWatch(mergedJson)
                 updated
             } finally { conn.disconnect() }
