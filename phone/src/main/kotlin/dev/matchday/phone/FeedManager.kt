@@ -48,8 +48,10 @@ class FeedManager(private val context: Context) {
             require(parsedUri.port == -1 || parsedUri.port == 443) { "표준 HTTPS 포트(443)만 허용합니다" }
             val conn = URL(link).openConnection() as HttpURLConnection
             try {
-                conn.connectTimeout = 7000
-                conn.readTimeout = 10000
+                // The complete fixture feed is expensive on a cold Worker cache.
+                // This longer timeout applies ONLY to /feed.json, not /live.json.
+                conn.connectTimeout = 10000
+                conn.readTimeout = 45000
                 // The URL contains the private feed key in its query string. Do not
                 // forward it to a different host through an HTTP redirect.
                 conn.instanceFollowRedirects = false
