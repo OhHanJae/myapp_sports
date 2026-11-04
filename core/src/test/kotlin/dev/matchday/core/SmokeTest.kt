@@ -72,6 +72,20 @@ fun main(args: Array<String>) {
         dateTime = "2026-10-30T20:00:00+09:00")
     check(watchLive.copy(games = listOf(liveLol, ongoingGen)).watchLolFeatured(today)?.id == "gen-live")
     check(feed.copy(games = emptyList()).watchLolFeatured(today) == null)
+    // The same feed access key (including encoded special characters) must be
+    // retained byte-for-byte when changing only /feed.json to /live.json.
+    val fullUrl = "https://matchday.example.workers.dev/feed.json?key=A%2BB%26C%3DD&scope=test"
+    check(FeedEndpointUrls.liveFromFeed(fullUrl) ==
+        "https://matchday.example.workers.dev/live.json?key=A%2BB%26C%3DD&scope=test")
+    check(FeedEndpointUrls.liveFromFeed("https://host.workers.dev/feed.json?key=plain") ==
+        "https://host.workers.dev/live.json?key=plain")
+    check(FeedEndpointUrls.liveFromFeed("https://host.workers.dev/feed.json") == null)
+    check(FeedEndpointUrls.liveFromFeed("https://host.workers.dev/live.json?key=x") == null)
+    check(FeedEndpointUrls.liveFromFeed("https://host.workers.dev/feed.json?key=") == null)
+    check(FeedEndpointUrls.liveFromFeed("https://host.workers.dev/feed.json?key=x&key=y") == null)
+    check(FeedEndpointUrls.liveFromFeed("http://host.workers.dev/feed.json?key=x") == null)
+    check(FeedEndpointUrls.liveFromFeed("https://host.workers.dev/feed.json?key=x#abc") == null)
+    check(!FeedEndpointUrls.AUTH_HELP.contains("A%2BB%26C%3DD"))
     check(runCatching { FeedCodec.decode("{}") }.isFailure)
     println("Core smoke test PASS: ${feed.teams.size} teams, ${feed.games.size} games, ${feed.series.size} bracket nodes")
 }
