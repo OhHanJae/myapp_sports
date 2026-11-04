@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLiveFeed, normalizeOfficialLiveBoard, parseOfficialLiveScoreHtml, LIVE_CACHE_SECONDS } from "../src.mjs";
+import { buildLiveFeed, normalizeOfficialLiveBoard, parseOfficialLiveScoreHtml, officialWebScoreToGame, LIVE_CACHE_SECONDS } from "../src.mjs";
 
 const now = Date.parse("2026-11-01T16:14:00+09:00");
 const row = (...cells) => ({row:cells.map(([Class, Text]) => ({Class, Text}))});
@@ -88,6 +88,33 @@ test("official live HTML accepts running score but rejects pregame 0:0",()=>{
     .replace("8회말","경기전").replace(">1</span>",">0</span>")
     .replace(">6</span>",">0</span>");
   assert.equal(parseOfficialLiveScoreHtml(pregame).length,0);
+});
+test("KBO live runs survive an unavailable or stale monthly schedule",async()=>{
+  const local=[];
+  const report=await buildLiveFeed({PANDASCORE_TOKEN:"mock"},async(url,options={})=>{
+    local.push(url);
+    if(url.includes("ScoreBoard.aspx"))return reply(scoreboardHtml);
+    if(url.includes("GetScheduleList"))throw Error("Schedule API blocked");
+    if(url.includes("/lol/matches/"))return reply([]);
+    throw Error("Unexpected "+url);
+  },now);
+  assert.equal(report.diagnostics.counts.KBO,1);
+  const game=report.games.find(g=>g.competition==="KBO");
+  assert.deepEqual([game.home,game.away,game.homeScore,game.awayScore],
+    ["SAM","KIA",6,1]);
+  assert.equal(game.inning,"8회말");
+  assert.equal(game.status,"LIVE");
+  assert.ok(game.dateTime.startsWith("2026-11-01T16:14"));
+  assert.ok(!local.some(x=>x.includes("GetScheduleList")),
+    "A valid live scoreboard must not block on a stale schedule");
+});
+test("KBO never fabricates a game from an invalid scoreboard ID",()=>{
+  const invalid=scoreboardHtml.replace("20261101HTSS0","20261101XXSS0");
+  assert.equal(parseOfficialLiveScoreHtml(invalid).length,1);
+  // The scoreboard adapter must reject unknown official team codes.
+  const games=officialWebScoreToGame({gameId:"20261101XXSS0",status:"LIVE",
+    homeScore:3,awayScore:1},"2026-11-01T16:14:00+09:00",now);
+  assert.equal(games,null);
 });
 test("KBO scoreboard failure does not invent live scores",async()=>{
   const notAvailable=normalizeOfficialLiveBoard({G_ID:"20261101HTSS0",code:"200",msg:"not ready"},
