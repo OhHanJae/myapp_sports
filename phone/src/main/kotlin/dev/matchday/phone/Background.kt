@@ -90,10 +90,17 @@ class FeedSyncWorker(context: Context, params: WorkerParameters) : CoroutineWork
     override suspend fun doWork(): Result {
         val store = FeedManager(applicationContext)
         if (store.url().isBlank()) return Result.success()
-        return store.refresh().fold(
-            onSuccess = { ReminderScheduler.update(applicationContext, it); Result.success() },
-            onFailure = { Result.retry() }
-        )
+        // Keep schedules reasonably fresh even if the app has not been opened.
+        // Score changes are a separate compact API; send them to Wear Data Layer.
+        val refreshFull = if (store.isFullRefreshDue(30 * 60_000L)) store.refresh()
+            else kotlin.Result.success(store.load())
+        val refreshed = refreshFull.getOrElse { store.load() }
+        if (!refreshed.isDemo) ReminderScheduler.update(applicationContext, refreshed)
+
+        val refreshScores = if (store.liveUrl() != null) store.refreshLive()
+            else kotlin.Result.success(store.load())
+        return if (refreshFull.isFailure && refreshScores.isFailure) Result.retry()
+            else Result.success()
     }
 }
 
@@ -108,6 +115,6 @@ object BackgroundSync {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
             .build()
-        wm.enqueueUniquePeriodicWork("matchday_periodic_sync", ExistingPeriodicWorkPolicy.UPDATE, request)
+        wm.enqueueUniquePeriodicWork("matchday_periodic_sync", ExistingPeriodicWorkPolicy.KEEP, request)
     }
 }
