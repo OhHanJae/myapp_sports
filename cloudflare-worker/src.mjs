@@ -19,6 +19,8 @@ const KBO_TEAMS = [
 ];
 const DATE_OFFSET = 9 * 60 * 60 * 1000;
 const CACHE_SECONDS = 300;
+const STALE_CACHE_SECONDS = 24 * 60 * 60; // Preserve last known valid feed for one day.
+const REFRESH_LOCK_SECONDS = 120;
 const jsonResponse = (value, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
 });
@@ -157,7 +159,9 @@ function tournamentCandidates(matches) {
 }
 async function panda(path, env, fetcher) {
   const r = await fetcher(PANDA + path, {
-    headers: { Authorization: "Bearer " + env.PANDASCORE_TOKEN, Accept: "application/json" }
+    headers: { Authorization: "Bearer " + env.PANDASCORE_TOKEN, Accept: "application/json" },
+    // Don't let one slow upstream stall the entire /feed.json response indefinitely.
+    signal: AbortSignal.timeout(8000)
   });
   if (!r.ok) throw new Error("PandaScore HTTP " + r.status + " at " + path.split("?")[0]);
   return r.json();
@@ -198,7 +202,10 @@ async function fetchLoL(env, fetcher, year, warnings) {
   const games = [];
   const standings = [];
   const series = [];
-  for (const [comp, raw] of byComp) {
+  // Previously five competitions were fetched SEQUENTIALLY. A single slow
+  // PandaScore tournament could stall KBO + LoL for dozens of seconds.
+  // Run competitions concurrently, and evaluate standings/brackets together.
+  await Promise.all([...byComp].map(async ([comp, raw]) => {
     const items = dedup(raw);
     for (const m of items) {
       list(m.opponents).forEach(entry => {
@@ -211,38 +218,37 @@ async function fetchLoL(env, fetcher, year, warnings) {
     const candidates = tournamentCandidates(items);
     const regular = candidates.filter(t => /regular|group|season|round|stage|swiss/i.test(t.name));
     const playoff = candidates.filter(t => /playoff|knockout|bracket|final|quarter|elimination/i.test(t.name) || t.bracket);
-    // Keep within free Workers subrequest budgets and PandaScore 60 req/min burst limit.
     const maxChecks = comp === "LCK" ? 3 : 2;
-    const checkedStandings = new Set();
-    for (const t of [...regular, ...candidates].slice(0, maxChecks)) {
-      if (checkedStandings.has(t.id)) continue;
-      checkedStandings.add(t.id);
-      const data = await optional("/tournaments/" + t.id + "/standings?per_page=100", env, fetcher, warnings);
+    const distinct = ts => [...new Map(ts.map(t => [t.id, t])).values()].slice(0, maxChecks);
+    const standCandidates = distinct([...regular, ...candidates]);
+    const bracketCandidates = distinct([...playoff, ...candidates]);
+    // Requests are optional: failure must not remove all other event data.
+    const [standResults, bracketResults] = await Promise.all([
+      Promise.all(standCandidates.map(t => optional(
+        "/tournaments/" + t.id + "/standings?per_page=100", env, fetcher, warnings))),
+      Promise.all(bracketCandidates.map(t => optional(
+        "/tournaments/" + t.id + "/brackets?per_page=100", env, fetcher, warnings)))
+    ]);
+    for (const data of standResults) {
       const rows = normalizeStandings(data, comp, String(year));
       standingsTeams(data, teams);
-      if (rows.length > 0) { standings.push(...rows); break; }
+      if (rows.length) { standings.push(...rows); break; }
     }
-    const checkedBrackets = new Set();
-    for (const t of [...playoff, ...candidates].slice(0, maxChecks)) {
-      if (checkedBrackets.has(t.id)) continue;
-      checkedBrackets.add(t.id);
-      const data = await optional("/tournaments/" + t.id + "/brackets?per_page=100", env, fetcher, warnings);
+    for (const data of bracketResults) {
       const rows = normalizeBracket(data, comp);
-      if (rows.length > 0) {
-        series.push(...rows);
-        for (const s of rows) {
-          const match = games.find(g => g.id === "PSM_" + s.id.slice(4));
-          if (match) match.seriesId = s.id;
-        }
-        // Some bracket participants were not in the global match list.
-        for (const m of bracketMatches(data)) list(m.opponents).forEach(e => {
-          const t = teamInfo(opponent(e));
-          if (t) teams.set(t.id, t);
-        });
-        break;
+      if (!rows.length) continue;
+      series.push(...rows);
+      for (const seriesMatch of rows) {
+        const match = games.find(g => g.id === "PSM_" + seriesMatch.id.slice(4));
+        if (match) match.seriesId = seriesMatch.id;
       }
+      for (const m of bracketMatches(data)) list(m.opponents).forEach(e => {
+        const t = teamInfo(opponent(e));
+        if (t) teams.set(t.id, t);
+      });
+      break;
     }
-  }
+  }));
   // Reference rows of genuinely completed regular stage matches only, if
   // a tournament standings endpoint is absent. No fake official ranks.
   for (const [comp, raw] of byComp) {
@@ -547,17 +553,27 @@ export function convertKbo(raw, year) {
 }
 export async function buildFeed(env, fetcher = fetch, year = new Date().getUTCFullYear()) {
   const warnings = [];
-  const lol = await fetchLoL(env, fetcher, year, warnings);
-  let kbo = { teams: KBO_TEAMS.map(([id, name, short]) =>
-    ({id, sport:"KBO", name, short, mark:id, logoUrl:""})), games: [], standings: [], series: [] };
-  try {
-    const resp = await fetcher(KBO + year + ".json", { headers: { Accept: "application/json" } });
-    if (!resp.ok) throw new Error("KBO upstream HTTP " + resp.status);
-    kbo = convertKbo(await resp.json(), year);
-  } catch (e) { warnings.push("KBO: " + str(e.message).slice(0, 120)); }
-  const postseason=await fetchKboPostseason(fetcher,year,kbo.standings,warnings);
-  kbo.games.push(...postseason.games);
-  kbo.series.push(...postseason.series);
+  // KBO and PandaScore are independent. Fetch both concurrently rather
+  // than waiting for all LoL tournaments before touching the KBO sources.
+  const lolJob = fetchLoL(env, fetcher, year, warnings);
+  const kboJob = (async () => {
+    let kbo = { teams: KBO_TEAMS.map(([id, name, short]) =>
+      ({id, sport:"KBO", name, short, mark:id, logoUrl:""})),
+      games: [], standings: [], series: [] };
+    try {
+      const resp = await fetcher(KBO + year + ".json", {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!resp.ok) throw new Error("KBO upstream HTTP " + resp.status);
+      kbo = convertKbo(await resp.json(), year);
+    } catch (e) { warnings.push("KBO: " + str(e.message).slice(0, 120)); }
+    const postseason = await fetchKboPostseason(fetcher, year, kbo.standings, warnings);
+    kbo.games.push(...postseason.games);
+    kbo.series.push(...postseason.series);
+    return { kbo, postseason };
+  })();
+  const [lol, { kbo, postseason }] = await Promise.all([lolJob, kboJob]);
   const teamMap = new Map([...kbo.teams, ...lol.teams.values()].map(t => [t.id, t]));
   const games = dedup([...kbo.games, ...lol.games]).sort((a, b) =>
     a.dateTime.localeCompare(b.dateTime));
@@ -771,7 +787,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/health")
-      return jsonResponse({ service:"matchday", ok:true, version:4,
+      return jsonResponse({ service:"matchday", ok:true, version:5,
         keyConfigured: !!(env.PANDASCORE_TOKEN && env.FEED_ACCESS_KEY) });
     if (url.pathname !== "/feed.json" && url.pathname !== "/status" && url.pathname !== "/live.json")
       return jsonResponse({ error:"Not found" }, 404);
@@ -798,23 +814,63 @@ export default {
       }
       return jsonResponse(data);
     }
-    const cacheKey = new Request(url.origin + "/__matchday_feed_v4", {method:"GET"});
-    let feed;
+    // Cache API is datacenter-local; keep the last valid snapshot for 24h
+    // and refresh asynchronously every 5m. Never cache a failed API response.
+    const cacheKey = new Request(url.origin + "/__matchday_feed_v5", {method:"GET"});
+    const refreshKey = new Request(url.origin + "/__matchday_feed_v5_refresh", {method:"GET"});
     const stored = await cache.match(cacheKey);
-    if (stored) feed = await stored.json();
-    else {
-      try {
-        feed = await buildFeed(env);
-      } catch (e) {
-        console.error("MATCHDAY fetch error: " + str(e.message));
-        return jsonResponse({error:"Upstream data unavailable"},502);
+    if (stored) {
+      const feed = await stored.json();
+      const last = Date.parse(feed.updatedAt);
+      const ageMs = Number.isFinite(last) ? Date.now() - last : Infinity;
+      if (ageMs > CACHE_SECONDS * 1000 && ctx?.waitUntil) {
+        const locked = await cache.match(refreshKey);
+        if (!locked) {
+          // Mark refresh in progress BEFORE scheduling it; concurrent requests
+          // can still race briefly but won't re-run dozens of API fetches.
+          const refresh = (async () => {
+            await cache.put(refreshKey, new Response("refreshing", {
+              headers: {"cache-control":"public, max-age=" + REFRESH_LOCK_SECONDS}
+            }));
+            try {
+              const next = await buildFeed(env);
+              await cache.put(cacheKey, new Response(JSON.stringify(next), {
+                headers: {"content-type":"application/json",
+                  "cache-control":"public, max-age=" + STALE_CACHE_SECONDS}
+              }));
+            } catch (e) {
+              console.error("MATCHDAY background refresh error: " + str(e.message));
+              // An error must not overwrite the last successfully saved feed.
+            }
+          })();
+          ctx.waitUntil(refresh);
+        }
       }
-      if (ctx?.waitUntil) ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(feed), {
-        headers: {"content-type":"application/json","cache-control":"public, max-age=" + CACHE_SECONDS}
-      })));
+      if (url.pathname === "/status")
+        return jsonResponse({ updatedAt:feed.updatedAt, sources:feed.sources,
+          diagnostics:feed.diagnostics, ageSeconds:Math.max(0,Math.round(ageMs/1000)),
+          cache:"stale-while-refreshing" });
+      return jsonResponse(feed);
     }
+    let feed;
+    try {
+      // Cold cache: a complete feed can require several independent providers.
+      // The phone must allow a longer FIRST response, but future cache hits
+      // respond immediately and do not block on PandaScore/KBO.
+      feed = await buildFeed(env);
+    } catch (e) {
+      console.error("MATCHDAY fetch error: " + str(e.message));
+      return jsonResponse({error:"Upstream data unavailable"},502);
+    }
+    const put = cache.put(cacheKey, new Response(JSON.stringify(feed), {
+      headers: {"content-type":"application/json",
+        "cache-control":"public, max-age=" + STALE_CACHE_SECONDS}
+    }));
+    if (ctx?.waitUntil) ctx.waitUntil(put);
+    else await put;
     if (url.pathname === "/status")
-      return jsonResponse({ updatedAt:feed.updatedAt, sources:feed.sources, diagnostics:feed.diagnostics });
+      return jsonResponse({ updatedAt:feed.updatedAt, sources:feed.sources,
+        diagnostics:feed.diagnostics, ageSeconds:0, cache:"cold" });
     return jsonResponse(feed);
   }
 };
