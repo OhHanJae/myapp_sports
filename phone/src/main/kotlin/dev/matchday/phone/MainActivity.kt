@@ -204,6 +204,8 @@ fun MatchdayPhone() {
                         liveError = when {
                             error.message?.contains("403") == true ->
                                 "인증 실패(403) · 설정의 ?key=값 확인"
+                            error.message?.contains("전체 경기 피드") == true ->
+                                "전체 피드 미수신 · 설정에서 새로고침 필요"
                             error.message?.contains("404") == true ->
                                 "Worker v5 배포 및 주소 확인"
                             error is java.net.SocketTimeoutException ->
