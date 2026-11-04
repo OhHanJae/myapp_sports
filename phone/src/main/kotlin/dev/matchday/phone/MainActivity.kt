@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import dev.matchday.core.Game
 import dev.matchday.core.SportsFeed
+import dev.matchday.core.FeedEndpointUrls
 import dev.matchday.core.activeLolCompetition
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -53,6 +54,7 @@ fun MatchdayPhone() {
     val manager = remember { FeedManager(context) }
     val pref = remember { context.getSharedPreferences("matchday_settings", 0) }
     var feed by remember { mutableStateOf(manager.load()) }
+    var lastFeedRevision by remember { mutableLongStateOf(manager.feedRevision()) }
     var sport by remember { mutableStateOf("KBO") }
     var lolComp by remember { mutableStateOf(feed.activeLolCompetition()) }
     var lolCompManuallySelected by remember { mutableStateOf(false) }
@@ -79,11 +81,21 @@ fun MatchdayPhone() {
     }
     var detail by remember { mutableStateOf<Game?>(null) }
     val scope = rememberCoroutineScope()
-    // Reflect notification Stop, session timeout or OS teardown while the
-    // Activity remains visible, so its normal 60s polling resumes immediately.
+    // The foreground service and WorkManager write to SharedPreferences from
+    // another lifecycle owner. A Compose state holding manager.load() will NOT
+    // automatically see that write, so observe the lightweight revision key.
+    // This also resumes normal polling when the fast session stops.
     LaunchedEffect(isVisible) {
         while (isVisible) {
             fastBackgroundSync = FastScoreSyncService.isRunning()
+            val revision = manager.feedRevision()
+            if (revision != lastFeedRevision) {
+                lastFeedRevision = revision
+                val refreshed = manager.load()
+                feed = refreshed
+                liveCheckedAt = refreshed.games.mapNotNull { it.checkedAt.takeIf { t -> t.length >= 16 } }
+                    .maxOrNull()?.substring(11, 16) ?: liveCheckedAt
+            }
             delay(5_000L)
         }
     }
@@ -189,9 +201,17 @@ fun MatchdayPhone() {
                         liveError = ""
                     },
                     onFailure = { error ->
-                        liveError = if (error.message?.contains("404") == true)
-                            "Worker v4 코드 배포 필요"
-                        else "실시간 점수 조회 지연"
+                        liveError = when {
+                            error.message?.contains("403") == true ->
+                                "인증 실패(403) · 설정의 ?key=값 확인"
+                            error.message?.contains("전체 경기 피드") == true ->
+                                "전체 피드 미수신 · 설정에서 새로고침 필요"
+                            error.message?.contains("404") == true ->
+                                "Worker v5 배포 및 주소 확인"
+                            error is java.net.SocketTimeoutException ->
+                                "실시간 API 응답 지연"
+                            else -> "실시간 점수 조회 실패"
+                        }
                     }
                 )
             }
@@ -260,6 +280,11 @@ fun MatchdayPhone() {
                         existingUrl = manager.url(), onSaveUrl = { link ->
                             if (link.isNotBlank() && !link.startsWith("https://", ignoreCase = true)) {
                                 message = "HTTPS 주소만 사용할 수 있습니다"
+                            } else if (link.contains("/live.json", ignoreCase = true)) {
+                                message = "앱 설정에는 /live.json 대신 /feed.json?key=접근키를 입력하세요"
+                            } else if (link.contains("/feed.json", ignoreCase = true) &&
+                                FeedEndpointUrls.liveFromFeed(link) == null) {
+                                message = FeedEndpointUrls.URL_HELP
                             } else {
                                 manager.setUrl(link)
                                 liveUrl = manager.liveUrl()

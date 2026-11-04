@@ -68,7 +68,20 @@ fun SportsFeed.mergeLive(live: LiveScores): SportsFeed {
                             OffsetDateTime.parse(original.dateTime)
                         ).toMinutes()
                     )
-                    diff <= 60
+                    // Official KBO scoreboard IDs/timestamps may differ from
+                    // the schedule entry (e.g. the schedule still says TBD).
+                    // The scoreboard's observation time is not kickoff time.
+                    // Match the same teams on the same day ONLY if both feeds
+                    // have exactly one such fixture; never merge doubleheaders.
+                    diff <= 60 || (
+                        original.competition == "KBO" &&
+                        originals.count { g -> g.competition == "KBO" &&
+                            g.home == original.home && g.away == original.away &&
+                            g.dateTime.take(10) == original.dateTime.take(10) } == 1 &&
+                        live.games.count { g -> g.competition == "KBO" &&
+                            g.home == original.home && g.away == original.away &&
+                            g.dateTime.take(10) == original.dateTime.take(10) } == 1
+                    )
                 }.getOrDefault(false))
         } ?: return@map original
         val nextStatus = when {

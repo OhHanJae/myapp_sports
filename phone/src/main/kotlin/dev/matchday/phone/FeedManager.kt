@@ -6,6 +6,7 @@ import android.util.Log
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import dev.matchday.core.FeedCodec
+import dev.matchday.core.FeedEndpointUrls
 import dev.matchday.core.FeedTransfer
 import dev.matchday.core.LiveCodec
 import dev.matchday.core.mergeLive
@@ -22,6 +23,7 @@ private const val KEY_FEED = "cached_feed"
 private const val KEY_URL = "feed_url"
 private const val KEY_LIVE = "cached_live_overlay"
 private const val KEY_LAST_FULL = "last_successful_full_sync"
+private const val KEY_REVISION = "cached_feed_revision"
 
 /** Local cached JSON is authoritative until a new, validated HTTPS response is received. */
 class FeedManager(private val context: Context) {
@@ -29,6 +31,8 @@ class FeedManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun demoJson(): String = context.assets.open("demo_feed.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
     fun readJson(): String = prefs.getString(KEY_FEED, null) ?: demoJson()
+    /** Tracks cache updates from WorkManager/foreground service/Activity. */
+    fun feedRevision(): Long = prefs.getLong(KEY_REVISION, 0L)
     private fun applyStoredLive(base: SportsFeed): SportsFeed =
         prefs.getString(KEY_LIVE, null)?.let { json ->
             runCatching { base.mergeLive(LiveCodec.decode(json)) }.getOrNull()
@@ -47,10 +51,15 @@ class FeedManager(private val context: Context) {
         val last = prefs.getLong(KEY_LAST_FULL, 0L)
         return last <= 0L || System.currentTimeMillis() - last >= intervalMillis
     }
-    fun resetDemo() { prefs.edit().remove(KEY_FEED).remove(KEY_LIVE).remove(KEY_URL).remove(KEY_LAST_FULL).apply(); sendToWatch(demoJson()) }
+    fun resetDemo() {
+        prefs.edit().remove(KEY_FEED).remove(KEY_LIVE).remove(KEY_URL)
+            .remove(KEY_LAST_FULL).putLong(KEY_REVISION, feedRevision() + 1L).apply()
+        sendToWatch(demoJson())
+    }
     fun save(json: String) {
         FeedCodec.decode(json) // Reject invalid feeds before persisting or syncing.
-        prefs.edit().putString(KEY_FEED, json).apply()
+        prefs.edit().putString(KEY_FEED, json)
+            .putLong(KEY_REVISION, feedRevision() + 1L).apply()
         sendToWatch(FeedCodec.encode(applyStoredLive(FeedCodec.decode(json))))
     }
     suspend fun refresh(): Result<SportsFeed> = withContext(Dispatchers.IO) {
@@ -70,7 +79,9 @@ class FeedManager(private val context: Context) {
                 // forward it to a different host through an HTTP redirect.
                 conn.instanceFollowRedirects = false
                 conn.setRequestProperty("Accept", "application/json")
-                require(conn.responseCode in 200..299) { "HTTP ${conn.responseCode}" }
+                val status = conn.responseCode
+                if (status == 403) error(FeedEndpointUrls.AUTH_HELP)
+                require(status in 200..299) { "전체 피드 HTTP $status" }
                 val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use {
                     it.readText().also { data -> require(data.length <= 2_000_000) { "JSON 파일이 너무 큽니다" } }
                 }
@@ -84,16 +95,7 @@ class FeedManager(private val context: Context) {
     }
     /** Derive /live.json from the user's existing authenticated /feed.json URL.
      * The API key remains on the exact same host and is never put in GitHub. */
-    fun liveUrl(): String? {
-        val link = url()
-        if (link.isBlank()) return null
-        val uri = Uri.parse(link)
-        if (!link.startsWith("https://", ignoreCase = true) ||
-            uri.path != "/feed.json" || uri.host.isNullOrBlank() ||
-            uri.userInfo != null || (uri.port != -1 && uri.port != 443) ||
-            uri.getQueryParameter("key").isNullOrBlank()) return null
-        return uri.buildUpon().path("/live.json").build().toString()
-    }
+    fun liveUrl(): String? = FeedEndpointUrls.liveFromFeed(url())
 
     /** Cheap foreground-only score polling, without downloading the full season. */
     suspend fun refreshLive(): Result<SportsFeed> = withContext(Dispatchers.IO) {
@@ -105,7 +107,9 @@ class FeedManager(private val context: Context) {
                 conn.readTimeout = 10000
                 conn.instanceFollowRedirects = false // Prevent access key redirect leakage.
                 conn.setRequestProperty("Accept", "application/json")
-                require(conn.responseCode in 200..299) { "스코어 API HTTP ${conn.responseCode}" }
+                val status = conn.responseCode
+                if (status == 403) error(FeedEndpointUrls.AUTH_HELP)
+                require(status in 200..299) { "스코어 API HTTP $status" }
                 val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { stream ->
                     stream.readText().also { require(it.length <= 300_000) { "스코어 피드 용량 초과" } }
                 }
@@ -113,12 +117,14 @@ class FeedManager(private val context: Context) {
                 // Start with load(), not the static full-feed cache: it includes the
                 // previous live overlay, so a sparse next response cannot erase scores.
                 val base = load()
-                if (overlay.games.isEmpty() || base.isDemo) return@runCatching base
+                if (base.isDemo) error("전체 경기 피드(/feed.json)를 먼저 동기화해야 합니다")
+                if (overlay.games.isEmpty()) return@runCatching base
                 val updated = base.mergeLive(overlay)
                 // Persist the merged snapshot itself. Live endpoints are intentionally
                 // sparse and may stop returning a game after it leaves their time window.
                 val mergedJson = FeedCodec.encode(updated)
-                prefs.edit().putString(KEY_FEED, mergedJson).remove(KEY_LIVE).apply()
+                prefs.edit().putString(KEY_FEED, mergedJson).remove(KEY_LIVE)
+                    .putLong(KEY_REVISION, feedRevision() + 1L).apply()
                 sendToWatch(mergedJson)
                 updated
             } finally { conn.disconnect() }
