@@ -6,6 +6,7 @@ import android.util.Log
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import dev.matchday.core.FeedCodec
+import dev.matchday.core.FeedEndpointUrls
 import dev.matchday.core.FeedTransfer
 import dev.matchday.core.LiveCodec
 import dev.matchday.core.mergeLive
@@ -70,7 +71,9 @@ class FeedManager(private val context: Context) {
                 // forward it to a different host through an HTTP redirect.
                 conn.instanceFollowRedirects = false
                 conn.setRequestProperty("Accept", "application/json")
-                require(conn.responseCode in 200..299) { "HTTP ${conn.responseCode}" }
+                val status = conn.responseCode
+                if (status == 403) error(FeedEndpointUrls.AUTH_HELP)
+                require(status in 200..299) { "전체 피드 HTTP $status" }
                 val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use {
                     it.readText().also { data -> require(data.length <= 2_000_000) { "JSON 파일이 너무 큽니다" } }
                 }
@@ -84,16 +87,7 @@ class FeedManager(private val context: Context) {
     }
     /** Derive /live.json from the user's existing authenticated /feed.json URL.
      * The API key remains on the exact same host and is never put in GitHub. */
-    fun liveUrl(): String? {
-        val link = url()
-        if (link.isBlank()) return null
-        val uri = Uri.parse(link)
-        if (!link.startsWith("https://", ignoreCase = true) ||
-            uri.path != "/feed.json" || uri.host.isNullOrBlank() ||
-            uri.userInfo != null || (uri.port != -1 && uri.port != 443) ||
-            uri.getQueryParameter("key").isNullOrBlank()) return null
-        return uri.buildUpon().path("/live.json").build().toString()
-    }
+    fun liveUrl(): String? = FeedEndpointUrls.liveFromFeed(url())
 
     /** Cheap foreground-only score polling, without downloading the full season. */
     suspend fun refreshLive(): Result<SportsFeed> = withContext(Dispatchers.IO) {
@@ -105,7 +99,9 @@ class FeedManager(private val context: Context) {
                 conn.readTimeout = 10000
                 conn.instanceFollowRedirects = false // Prevent access key redirect leakage.
                 conn.setRequestProperty("Accept", "application/json")
-                require(conn.responseCode in 200..299) { "스코어 API HTTP ${conn.responseCode}" }
+                val status = conn.responseCode
+                if (status == 403) error(FeedEndpointUrls.AUTH_HELP)
+                require(status in 200..299) { "스코어 API HTTP $status" }
                 val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { stream ->
                     stream.readText().also { require(it.length <= 300_000) { "스코어 피드 용량 초과" } }
                 }
