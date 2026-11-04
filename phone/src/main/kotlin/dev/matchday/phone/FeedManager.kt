@@ -117,7 +117,8 @@ class FeedManager(private val context: Context) {
                 // Start with load(), not the static full-feed cache: it includes the
                 // previous live overlay, so a sparse next response cannot erase scores.
                 val base = load()
-                if (overlay.games.isEmpty() || base.isDemo) return@runCatching base
+                if (base.isDemo) error("전체 경기 피드(/feed.json)를 먼저 동기화해야 합니다")
+                if (overlay.games.isEmpty()) return@runCatching base
                 val updated = base.mergeLive(overlay)
                 // Persist the merged snapshot itself. Live endpoints are intentionally
                 // sparse and may stop returning a game after it leaves their time window.
