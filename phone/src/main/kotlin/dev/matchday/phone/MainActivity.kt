@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import dev.matchday.core.Game
 import dev.matchday.core.SportsFeed
+import dev.matchday.core.FeedEndpointUrls
 import dev.matchday.core.activeLolCompetition
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -189,9 +190,15 @@ fun MatchdayPhone() {
                         liveError = ""
                     },
                     onFailure = { error ->
-                        liveError = if (error.message?.contains("404") == true)
-                            "Worker v4 코드 배포 필요"
-                        else "실시간 점수 조회 지연"
+                        liveError = when {
+                            error.message?.contains("403") == true ->
+                                "인증 실패(403) · 설정의 ?key=값 확인"
+                            error.message?.contains("404") == true ->
+                                "Worker v5 배포 및 주소 확인"
+                            error is java.net.SocketTimeoutException ->
+                                "실시간 API 응답 지연"
+                            else -> "실시간 점수 조회 실패"
+                        }
                     }
                 )
             }
@@ -260,6 +267,11 @@ fun MatchdayPhone() {
                         existingUrl = manager.url(), onSaveUrl = { link ->
                             if (link.isNotBlank() && !link.startsWith("https://", ignoreCase = true)) {
                                 message = "HTTPS 주소만 사용할 수 있습니다"
+                            } else if (link.contains("/live.json", ignoreCase = true)) {
+                                message = "앱 설정에는 /live.json 대신 /feed.json?key=접근키를 입력하세요"
+                            } else if (link.contains("/feed.json", ignoreCase = true) &&
+                                FeedEndpointUrls.liveFromFeed(link) == null) {
+                                message = FeedEndpointUrls.URL_HELP
                             } else {
                                 manager.setUrl(link)
                                 liveUrl = manager.liveUrl()
