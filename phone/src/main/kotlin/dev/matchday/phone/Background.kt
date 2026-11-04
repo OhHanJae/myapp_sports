@@ -92,15 +92,24 @@ class FeedSyncWorker(context: Context, params: WorkerParameters) : CoroutineWork
         if (store.url().isBlank()) return Result.success()
         // Keep schedules reasonably fresh even if the app has not been opened.
         // Score changes are a separate compact API; send them to Wear Data Layer.
-        val refreshFull = if (store.isFullRefreshDue(30 * 60_000L)) store.refresh()
+        val fullDue = store.isFullRefreshDue(30 * 60_000L)
+        val refreshFull = if (fullDue) store.refresh()
             else kotlin.Result.success(store.load())
         val refreshed = refreshFull.getOrElse { store.load() }
-        if (!refreshed.isDemo) ReminderScheduler.update(applicationContext, refreshed)
+        // Reminder rescheduling is expensive; do it only after a new full feed.
+        if (fullDue && refreshFull.isSuccess && !refreshed.isDemo)
+            ReminderScheduler.update(applicationContext, refreshed)
 
-        val refreshScores = if (store.liveUrl() != null) store.refreshLive()
-            else kotlin.Result.success(store.load())
-        return if (refreshFull.isFailure && refreshScores.isFailure) Result.retry()
-            else Result.success()
+        // An active foreground session handles live scores every minute.
+        val refreshScores = if (FastScoreSyncService.isRunning())
+            kotlin.Result.success(store.load())
+        else if (store.liveUrl() != null) store.refreshLive()
+        else kotlin.Result.success(store.load())
+        // If the very first full sync failed, do not pretend a demo feed is
+        // successfully synchronized simply because the live endpoint returned.
+        return if ((refreshed.isDemo && refreshFull.isFailure) ||
+            (refreshFull.isFailure && refreshScores.isFailure)) Result.retry()
+        else Result.success()
     }
 }
 
